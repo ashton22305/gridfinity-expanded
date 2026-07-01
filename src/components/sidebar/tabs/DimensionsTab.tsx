@@ -70,6 +70,26 @@ export function DimensionsTab({ config, onChange }: Props) {
         </div>
         <p className={styles.hint}>3.75 mm matches standard Gridfinity baseplates</p>
       </label>
+
+      <label className={styles.field}>
+        <span className={styles.label}>Inner fillet</span>
+        <div className={styles.inputRow}>
+          <input
+            type="range"
+            min={0}
+            max={3}
+            step={0.25}
+            value={config.innerFilletRadius}
+            onChange={(e) => onChange({ ...config, innerFilletRadius: Number(e.target.value) })}
+            className={styles.slider}
+          />
+          <span className={styles.value}>
+            {config.innerFilletRadius.toFixed(2)}
+            <span className={styles.mm}> mm</span>
+          </span>
+        </div>
+        <p className={styles.hint}>Rounds the inside floor-to-wall edge for easier cleaning</p>
+      </label>
     </div>
   );
 }

@@ -29,8 +29,18 @@ const FLOOR_THICKNESS = 1.2;
 // Floor fillet: concave quarter-circle at the cavity floor-to-wall junction.
 // Uses stacked extrude prisms rather than hull() — hull fills concave notches
 // on non-rectangular (L, T, staircase) bins, which punches a hole on subtract.
-const FILLET_R     = 0.5;
-const FILLET_STEPS = 12;
+// Radius comes from config (innerFilletRadius); resolution scales with it.
+const FILLET_STEPS_PER_MM = 24;
+
+function filletSteps(r: number): number {
+  return Math.min(48, Math.max(4, Math.ceil(r * FILLET_STEPS_PER_MM)));
+}
+
+/** Clamp the configured fillet radius so it never exceeds the cavity depth. */
+function clampFilletR(requested: number, totalHeight: number): number {
+  const cavityDepth = totalHeight - (BASE_TOTAL_HEIGHT + FLOOR_THICKNESS);
+  return Math.max(0, Math.min(requested || 0, cavityDepth));
+}
 
 const MAGNET_RADIUS  = 3.25;   // 6.5 mm OD N52 disc magnets
 const MAGNET_DEPTH   = 2.4;    // 2 mm + 0.4 mm tolerance
@@ -141,7 +151,9 @@ function buildShell(cells: GridCell[], totalHeight: number, outerProfile: Geom2)
 }
 
 /** Inner cavity volume with a concave quarter-circle fillet at the floor edge. */
-function buildCavity(outerProfile: Geom2, totalHeight: number, wallThickness: number): Geom3 {
+function buildCavity(
+  outerProfile: Geom2, totalHeight: number, wallThickness: number, filletR: number,
+): Geom3 {
   const innerProfile: Geom2 = expansions.offset(
     { delta: -wallThickness, corners: 'round', segments: 16 },
     outerProfile,
@@ -149,11 +161,19 @@ function buildCavity(outerProfile: Geom2, totalHeight: number, wallThickness: nu
 
   const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
 
+  const main: Geom3 = transforms.translate([0, 0, floorZ + filletR],
+    extrusions.extrudeLinear(
+      { height: totalHeight - floorZ - filletR + CSG_EPSILON },
+      innerProfile,
+    )) as Geom3;
+  if (filletR <= 0) return main;
+
   // Inset formula: R·(1 − √(2t − t²)), t = dz/R — traces a concave quarter-circle arc.
-  const stepH = FILLET_R / FILLET_STEPS;
-  const filletPrisms: Geom3[] = Array.from({ length: FILLET_STEPS }, (_, i) => {
-    const t     = (i + 0.5) / FILLET_STEPS;
-    const inset = FILLET_R * (1 - Math.sqrt(Math.max(0, 2 * t - t * t)));
+  const steps = filletSteps(filletR);
+  const stepH = filletR / steps;
+  const filletPrisms: Geom3[] = Array.from({ length: steps }, (_, i) => {
+    const t     = (i + 0.5) / steps;
+    const inset = filletR * (1 - Math.sqrt(Math.max(0, 2 * t - t * t)));
     const prof: Geom2 = (inset > 0.001
       ? expansions.offset({ delta: -inset, corners: 'round', segments: 16 }, innerProfile)
       : innerProfile) as Geom2;
@@ -165,14 +185,7 @@ function buildCavity(outerProfile: Geom2, totalHeight: number, wallThickness: nu
       extrusions.extrudeLinear({ height: stepH + CSG_EPSILON }, prof)) as Geom3;
   });
 
-  const fillet: Geom3 = union(filletPrisms);
-  const main:   Geom3 = transforms.translate([0, 0, floorZ + FILLET_R],
-    extrusions.extrudeLinear(
-      { height: totalHeight - floorZ - FILLET_R + CSG_EPSILON },
-      innerProfile,
-    )) as Geom3;
-
-  return booleans.union(fillet, main) as Geom3;
+  return booleans.union(union(filletPrisms), main) as Geom3;
 }
 
 /** Fastener pockets at the four corners of each cell's connector peg. */
@@ -195,14 +208,15 @@ function buildFastenerHoles(
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 export function generateBin(config: BinConfig): Geom3 {
-  const { cells, heightUnits, wallThickness, cornerRadius, magnetHoles, screwHoles } = config;
+  const { cells, heightUnits, wallThickness, cornerRadius, innerFilletRadius, magnetHoles, screwHoles } = config;
 
   if (cells.length === 0) return primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3;
 
   const totalHeight  = BASE_TOTAL_HEIGHT + HEIGHT_PER_UNIT * Math.max(1, heightUnits);
+  const filletR      = clampFilletR(innerFilletRadius, totalHeight);
   const outerProfile = buildOuterProfile(cells, cornerRadius);
   const shell        = buildShell(cells, totalHeight, outerProfile);
-  const cavity       = buildCavity(outerProfile, totalHeight, wallThickness);
+  const cavity       = buildCavity(outerProfile, totalHeight, wallThickness, filletR);
 
   let bin: Geom3 = booleans.subtract(shell, cavity) as Geom3;
   if (magnetHoles) bin = booleans.subtract(bin, ...buildFastenerHoles(cells, MAGNET_RADIUS, MAGNET_DEPTH, 32)) as Geom3;
@@ -224,7 +238,7 @@ export function generateBin(config: BinConfig): Geom3 {
  */
 export function generateBinManifold(wasm: ManifoldToplevel, config: BinConfig): BinMesh {
   const { Manifold } = wasm;
-  const { cells, heightUnits, wallThickness, cornerRadius, magnetHoles, screwHoles } = config;
+  const { cells, heightUnits, wallThickness, cornerRadius, innerFilletRadius, magnetHoles, screwHoles } = config;
 
   if (cells.length === 0) {
     return manifoldMesh(geom3ToManifold(wasm, primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3));
@@ -247,15 +261,17 @@ export function generateBinManifold(wasm: ManifoldToplevel, config: BinConfig): 
   solids.push(outerCS.extrude(totalHeight - PEG_HEIGHT).translate([0, 0, PEG_HEIGHT]));
   let bin = Manifold.union(solids);
 
-  // Cavity: a stack of concave-fillet prisms (floorZ → floorZ+FILLET_R) capped by
+  // Cavity: a stack of concave-fillet prisms (floorZ → floorZ+filletR) capped by
   // the straight inner column, which pokes CSG_EPSILON past the rim so the top
   // cut opens cleanly. Clipper2 offsets stay valid at any wall thickness.
   const innerCS = outerCS.offset(-wallThickness, 'Miter', 2);
   const floorZ  = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
-  const stepH   = FILLET_R / FILLET_STEPS;
-  const cavity: Manifold[] = Array.from({ length: FILLET_STEPS }, (_, i) => {
-    const t     = (i + 0.5) / FILLET_STEPS;
-    const inset = FILLET_R * (1 - Math.sqrt(Math.max(0, 2 * t - t * t)));
+  const filletR = clampFilletR(innerFilletRadius, totalHeight);
+  const steps   = filletR > 0 ? filletSteps(filletR) : 0;
+  const stepH   = steps > 0 ? filletR / steps : 0;
+  const cavity: Manifold[] = Array.from({ length: steps }, (_, i) => {
+    const t     = (i + 0.5) / steps;
+    const inset = filletR * (1 - Math.sqrt(Math.max(0, 2 * t - t * t)));
     const cs    = inset > 0.001 ? innerCS.offset(-inset, 'Miter', 2) : innerCS;
     // Overshoot each prism by CSG_EPSILON into the step above. Flush stacking
     // is NOT exact here: the shared plane is floorZ + (i+1)·stepH on one side
@@ -270,7 +286,7 @@ export function generateBinManifold(wasm: ManifoldToplevel, config: BinConfig): 
     return cs.extrude(stepH + CSG_EPSILON).translate([0, 0, floorZ + i * stepH]);
   });
   cavity.push(
-    innerCS.extrude(totalHeight - floorZ - FILLET_R + CSG_EPSILON).translate([0, 0, floorZ + FILLET_R]),
+    innerCS.extrude(totalHeight - floorZ - filletR + CSG_EPSILON).translate([0, 0, floorZ + filletR]),
   );
   bin = bin.subtract(Manifold.union(cavity));
 

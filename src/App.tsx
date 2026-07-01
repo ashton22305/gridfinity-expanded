@@ -18,6 +18,7 @@ const DEFAULT_CONFIG: BinConfig = {
   heightUnits: 3,
   wallThickness: 1.2,
   cornerRadius: 3.75,  // Gridfinity standard outer fillet
+  innerFilletRadius: 0.5,
   magnetHoles: true,
   screwHoles: false,
 };

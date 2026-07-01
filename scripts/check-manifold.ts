@@ -169,7 +169,8 @@ const staircase: GridCell[] = [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 2 }]; 
 const disjoint: GridCell[] = [{ x: 0, y: 0 }, { x: 2, y: 0 }];                   // separated cells
 
 const base: Omit<BinConfig, 'cells'> = {
-  heightUnits: 3, wallThickness: 1.2, cornerRadius: 3.75, magnetHoles: true, screwHoles: false,
+  heightUnits: 3, wallThickness: 1.2, cornerRadius: 3.75, innerFilletRadius: 0.5,
+  magnetHoles: true, screwHoles: false,
 };
 
 const cases: { name: string; config: BinConfig }[] = [
@@ -187,6 +188,11 @@ const cases: { name: string; config: BinConfig }[] = [
   { name: '2x2 no holes',        config: { ...base, cells: rect(2, 2), magnetHoles: false, screwHoles: false } },
   { name: '2x2 screw only',      config: { ...base, cells: rect(2, 2), magnetHoles: false, screwHoles: true } },
   { name: '3x3 cornerR6',        config: { ...base, cells: rect(3, 3), cornerRadius: 6 } },
+  { name: '2x2 fillet0',         config: { ...base, cells: rect(2, 2), innerFilletRadius: 0 } },
+  { name: '2x2 fillet3',         config: { ...base, cells: rect(2, 2), innerFilletRadius: 3 } },
+  { name: 'L-shape fillet2',     config: { ...base, cells: L, innerFilletRadius: 2 } },
+  { name: '1x1 h1 fillet3',      config: { ...base, cells: rect(1, 1), heightUnits: 1, innerFilletRadius: 3 } },
+  { name: 'thickwall fillet3',   config: { ...base, cells: rect(1, 1), wallThickness: 4, innerFilletRadius: 3 } },
   { name: 'empty (unit cube)',   config: { ...base, cells: [] } },
 ];
 
