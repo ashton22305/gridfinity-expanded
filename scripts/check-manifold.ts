@@ -21,6 +21,7 @@ interface Report {
   nonManifoldEdges: number;
   orientationErrors: number;
   duplicateFaces: number;
+  membranes: number;
 }
 
 function analyzeIndexed(mesh: BinMesh): Report {
@@ -59,7 +60,83 @@ function analyzeIndexed(mesh: BinMesh): Report {
   let duplicateFaces = 0;
   for (const n of faces.values()) if (n > 1) duplicateFaces += n - 1;
 
-  return { triangles: tv.length / 3, degenerate, boundaryEdges, nonManifoldEdges, orientationErrors, duplicateFaces };
+  return {
+    triangles: tv.length / 3, degenerate, boundaryEdges, nonManifoldEdges, orientationErrors,
+    duplicateFaces, membranes: countMembranes(mesh),
+  };
+}
+
+/**
+ * Zero-thickness membranes: opposite-facing triangles lying in the same
+ * geometric plane and covering the same region — paper-thin sheets inside the
+ * solid. Every edge is still shared by exactly two oppositely-wound triangles,
+ * so they pass the edge checks above, yet they z-fight in slicer viewports and
+ * slice as phantom walls. (They arise when stacked slabs miss flush contact by
+ * an ULP: the boolean keeps the sub-nanometre gap and the float32 output welds
+ * its two sides into one plane.) A plane counts as a membrane when some
+ * triangle's centroid lies ≥ 1 µm interior to an opposite-facing coplanar
+ * triangle — requiring real two-sided coverage, so legitimately coplanar but
+ * disjoint regions (e.g. a base flare beside a bridge underside) and sub-micron
+ * contour-sampling slivers along shared walls don't trip it.
+ */
+function countMembranes(mesh: BinMesh): number {
+  const { vertProperties: vp, triVerts: tv } = mesh;
+  // 2D projection of a plane-pair's triangles: [ax, ay, bx, by, cx, cy][]
+  type Tri2 = [number, number, number, number, number, number];
+  const planes = new Map<string, [Tri2[], Tri2[]]>();  // [facing canonical direction, facing opposite]
+
+  for (let i = 0; i < tv.length; i += 3) {
+    const [p, q, r] = [tv[i] * 3, tv[i + 1] * 3, tv[i + 2] * 3];
+    const ux = vp[q]-vp[p], uy = vp[q+1]-vp[p+1], uz = vp[q+2]-vp[p+2];
+    const vx = vp[r]-vp[p], vy = vp[r+1]-vp[p+1], vz = vp[r+2]-vp[p+2];
+    let nx = uy*vz-uz*vy, ny = uz*vx-ux*vz, nz = ux*vy-uy*vx;
+    const len = Math.hypot(nx, ny, nz);
+    if (len < 1e-9) continue;
+    nx /= len; ny /= len; nz /= len;
+    // Canonical plane key: flip the normal so its first significant component
+    // is positive; slot 0 collects triangles facing the canonical direction.
+    const flip = nx < -1e-6 || (nx <= 1e-6 && (ny < -1e-6 || (ny <= 1e-6 && nz < 0)));
+    const s = flip ? -1 : 1;
+    const d = nx*vp[p] + ny*vp[p+1] + nz*vp[p+2];
+    const key = `${Math.round(s*nx*1e3)},${Math.round(s*ny*1e3)},${Math.round(s*nz*1e3)},${Math.round(s*d*1e3)}`;
+
+    // Project onto the two axes orthogonal to the dominant normal component.
+    const dominant = Math.abs(nx) >= Math.abs(ny)
+      ? (Math.abs(nx) >= Math.abs(nz) ? 0 : 2)
+      : (Math.abs(ny) >= Math.abs(nz) ? 1 : 2);
+    const [a1, a2] = dominant === 0 ? [1, 2] : dominant === 1 ? [0, 2] : [0, 1];
+
+    let pair = planes.get(key);
+    if (!pair) { pair = [[], []]; planes.set(key, pair); }
+    pair[flip ? 1 : 0].push([vp[p+a1], vp[p+a2], vp[q+a1], vp[q+a2], vp[r+a1], vp[r+a2]]);
+  }
+
+  /** Is (px, py) at least `margin` interior to the 2D triangle (either winding)? */
+  const inside = (t: Tri2, px: number, py: number, margin: number): boolean => {
+    let sign = 0;
+    for (let e = 0; e < 3; e++) {
+      const x1 = t[(e*2) % 6], y1 = t[(e*2+1) % 6], x2 = t[(e*2+2) % 6], y2 = t[(e*2+3) % 6];
+      const elen = Math.hypot(x2-x1, y2-y1);
+      if (elen < 1e-12) return false;
+      const dist = ((x2-x1)*(py-y1) - (y2-y1)*(px-x1)) / elen;  // signed distance to edge
+      if (Math.abs(dist) < margin) return false;
+      if (sign === 0) sign = Math.sign(dist);
+      else if (Math.sign(dist) !== sign) return false;
+    }
+    return true;
+  };
+
+  let membranes = 0;
+  for (const [front, back] of planes.values()) {
+    if (!front.length || !back.length) continue;
+    const [probe, cover] = front.length <= back.length ? [front, back] : [back, front];
+    const covered = probe.some((t) => {
+      const cx = (t[0]+t[2]+t[4]) / 3, cy = (t[1]+t[3]+t[5]) / 3;
+      return cover.some((c) => inside(c, cx, cy, 1e-3));
+    });
+    if (covered) membranes++;
+  }
+  return membranes;
 }
 
 /** Boundary/non-manifold edge count of the serialized STL (welds float32 triangle soup). */
@@ -122,13 +199,13 @@ const cases: { name: string; config: BinConfig }[] = [
       const mesh = generateBinManifold(wasm, config);
       const r = analyzeIndexed(mesh);
       const stl = stlBoundary(meshToStl(mesh.vertProperties, mesh.triVerts));
-      const bad = r.boundaryEdges || r.nonManifoldEdges || r.orientationErrors || r.degenerate || r.duplicateFaces || stl.boundary || stl.nonManifold;
+      const bad = r.boundaryEdges || r.nonManifoldEdges || r.orientationErrors || r.degenerate || r.duplicateFaces || r.membranes || stl.boundary || stl.nonManifold;
       if (bad) anyBad = true;
       console.log(
         `${name.padEnd(22)} tris=${String(r.triangles).padStart(6)} ` +
         `boundary=${r.boundaryEdges} nonManifold=${r.nonManifoldEdges} orient=${r.orientationErrors} ` +
-        `degen=${r.degenerate} dupFace=${r.duplicateFaces} | stl(bnd=${stl.boundary},nm=${stl.nonManifold})` +
-        (bad ? '  ✗ NON-MANIFOLD' : '  ✓ manifold'),
+        `degen=${r.degenerate} dupFace=${r.duplicateFaces} membrane=${r.membranes} | stl(bnd=${stl.boundary},nm=${stl.nonManifold})` +
+        (bad ? '  ✗ DEFECTIVE' : '  ✓ clean'),
       );
     } catch (err) {
       anyBad = true;
@@ -137,7 +214,7 @@ const cases: { name: string; config: BinConfig }[] = [
   }
 
   console.log(anyBad
-    ? '\nRESULT: FAIL — non-manifold output detected.'
-    : '\nRESULT: PASS — all cases watertight & manifold.');
+    ? '\nRESULT: FAIL — defective output detected.'
+    : '\nRESULT: PASS — all cases watertight, manifold & membrane-free.');
   process.exit(anyBad ? 1 : 0);
 })();
