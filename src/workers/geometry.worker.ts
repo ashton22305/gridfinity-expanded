@@ -4,9 +4,10 @@ import { generateBin } from '../lib/geometry/gridfinity';
 import { serialize } from '@jscad/stl-serializer';
 import type { BinConfig } from '../lib/types';
 
-self.onmessage = (e: MessageEvent<BinConfig>) => {
+self.onmessage = (e: MessageEvent<{ config: BinConfig; requestId: number }>) => {
+  const { config, requestId } = e.data;
   try {
-    const geometry = generateBin(e.data);
+    const geometry = generateBin(config);
     // serialize() returns an array of ArrayBuffers (header / count / triangles).
     const parts = serialize({ binary: true }, geometry) as ArrayBuffer[];
     const totalLength = parts.reduce((n, p) => n + p.byteLength, 0);
@@ -16,8 +17,8 @@ self.onmessage = (e: MessageEvent<BinConfig>) => {
       combined.set(new Uint8Array(part), offset);
       offset += part.byteLength;
     }
-    self.postMessage({ ok: true, buffer: combined.buffer }, [combined.buffer]);
+    self.postMessage({ ok: true, buffer: combined.buffer, requestId }, [combined.buffer]);
   } catch (err) {
-    self.postMessage({ ok: false, error: String(err) });
+    self.postMessage({ ok: false, error: String(err), requestId });
   }
 };

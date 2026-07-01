@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import type { BinConfig, GridCell } from '../../../lib/types';
+import { GRID_PITCH } from '../../../lib/geometry/gridfinity';
+import { getGridFootprintCells } from '../../../lib/printers';
 import styles from './ShapeTab.module.css';
 
 interface Props {
@@ -9,7 +11,6 @@ interface Props {
 
 const GRID_COLS = 6;
 const GRID_ROWS = 6;
-const GRID_PITCH = 42; // mm, for display only
 
 function cellKey(c: GridCell) {
   return `${c.x},${c.y}`;
@@ -50,10 +51,7 @@ export function ShapeTab({ config, onChange }: Props) {
   }
 
   const cells = config.cells;
-  const xs = cells.map((c) => c.x);
-  const ys = cells.map((c) => c.y);
-  const wCells = cells.length > 0 ? Math.max(...xs) - Math.min(...xs) + 1 : 0;
-  const dCells = cells.length > 0 ? Math.max(...ys) - Math.min(...ys) + 1 : 0;
+  const { widthCells, depthCells } = getGridFootprintCells(cells);
 
   return (
     <div
@@ -86,7 +84,7 @@ export function ShapeTab({ config, onChange }: Props) {
         <span>{cells.length} cell{cells.length !== 1 ? 's' : ''}</span>
         {cells.length > 0 && (
           <span>
-            {wCells * GRID_PITCH} × {dCells * GRID_PITCH} mm footprint
+            {widthCells * GRID_PITCH} × {depthCells * GRID_PITCH} mm footprint
           </span>
         )}
       </div>

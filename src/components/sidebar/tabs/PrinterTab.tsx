@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { PRINTER_PROFILES, checkBedFit } from '../../../lib/printers';
 import type { GridCell, PrinterProfile } from '../../../lib/types';
 import styles from './PrinterTab.module.css';
@@ -10,13 +9,12 @@ interface Props {
 }
 
 export function PrinterTab({ cells, profile, onChange }: Props) {
-  const [isCustom, setIsCustom] = useState(profile.name === 'Custom');
+  const isCustom = profile.name === 'Custom';
   const bedFit = checkBedFit(cells, profile);
 
   function handlePresetChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const found = PRINTER_PROFILES.find((p) => p.name === e.target.value);
     if (!found) return;
-    setIsCustom(found.name === 'Custom');
     onChange(found);
   }
 

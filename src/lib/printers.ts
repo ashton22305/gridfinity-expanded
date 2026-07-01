@@ -15,18 +15,27 @@ export const PRINTER_PROFILES: PrinterProfile[] = [
 
 const BED_MARGIN = 5; // mm clearance around part on bed
 
+export function getGridFootprintCells(cells: GridCell[]): {
+  widthCells: number;
+  depthCells: number;
+} {
+  if (cells.length === 0) return { widthCells: 0, depthCells: 0 };
+
+  const xs = cells.map((c) => c.x);
+  const ys = cells.map((c) => c.y);
+  return {
+    widthCells: Math.max(...xs) - Math.min(...xs) + 1,
+    depthCells: Math.max(...ys) - Math.min(...ys) + 1,
+  };
+}
+
 export function checkBedFit(
   cells: GridCell[],
   printer: PrinterProfile
 ): BedFitResult {
-  if (cells.length === 0) {
-    return { fits: true, binWidth: 0, binDepth: 0 };
-  }
-
-  const xs = cells.map((c) => c.x);
-  const ys = cells.map((c) => c.y);
-  const binWidth = (Math.max(...xs) - Math.min(...xs) + 1) * GRID_PITCH;
-  const binDepth = (Math.max(...ys) - Math.min(...ys) + 1) * GRID_PITCH;
+  const { widthCells, depthCells } = getGridFootprintCells(cells);
+  const binWidth = widthCells * GRID_PITCH;
+  const binDepth = depthCells * GRID_PITCH;
 
   return {
     fits:

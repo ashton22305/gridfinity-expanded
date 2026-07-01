@@ -74,8 +74,9 @@ export function BabylonViewer({ stlBuffer, generating, error }: Props) {
     const camera = cameraRef.current;
     if (!scene || !stlBuffer) return;
 
-    // Dispose all existing meshes.
+    // Dispose all existing meshes and materials before loading the new mesh.
     scene.meshes.slice().forEach((m) => m.dispose());
+    scene.materials.slice().forEach((m) => m.dispose());
 
     const blob = new Blob([stlBuffer], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
