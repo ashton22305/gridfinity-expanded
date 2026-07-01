@@ -239,16 +239,17 @@ export function generateBinManifold(wasm: ManifoldToplevel, config: BinConfig): 
     pegSections(x * GRID_PITCH + GRID_PITCH / 2, y * GRID_PITCH + GRID_PITCH / 2)
       .map((s) => geom3ToManifold(wasm, s)),
   );
-  // Flush at z = PEG_HEIGHT: the robust boolean fuses the coincident interface
-  // exactly, so no overlap is needed (and none is wanted — an overlap of
-  // differing cross-sections would leave slivers).
+  // Flush at z = PEG_HEIGHT: safe only because both sides land on the identical
+  // coordinate — 4.75 is exactly representable, so the float32-quantized peg
+  // vertices and this double-precision extrude sit on the same plane and the
+  // boolean fuses the interface. Flush junctions whose z comes from differing
+  // float expressions do NOT fuse (see the fillet stack below).
   solids.push(outerCS.extrude(totalHeight - PEG_HEIGHT).translate([0, 0, PEG_HEIGHT]));
   let bin = Manifold.union(solids);
 
   // Cavity: a stack of concave-fillet prisms (floorZ → floorZ+FILLET_R) capped by
   // the straight inner column, which pokes CSG_EPSILON past the rim so the top
-  // cut opens cleanly. Clipper2 offsets stay valid at any wall thickness; the
-  // fillet slices meet flush.
+  // cut opens cleanly. Clipper2 offsets stay valid at any wall thickness.
   const innerCS = outerCS.offset(-wallThickness, 'Miter', 2);
   const floorZ  = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
   const stepH   = FILLET_R / FILLET_STEPS;
@@ -256,7 +257,17 @@ export function generateBinManifold(wasm: ManifoldToplevel, config: BinConfig): 
     const t     = (i + 0.5) / FILLET_STEPS;
     const inset = FILLET_R * (1 - Math.sqrt(Math.max(0, 2 * t - t * t)));
     const cs    = inset > 0.001 ? innerCS.offset(-inset, 'Miter', 2) : innerCS;
-    return cs.extrude(stepH).translate([0, 0, floorZ + i * stepH]);
+    // Overshoot each prism by CSG_EPSILON into the step above. Flush stacking
+    // is NOT exact here: the shared plane is floorZ + (i+1)·stepH on one side
+    // but (floorZ + i·stepH) + stepH on the other, and for some i those doubles
+    // differ by 1 ULP. Manifold keeps the sub-nanometre gap, splitting the
+    // cavity into stacked slabs whose subtraction leaves zero-thickness sheets
+    // of bin material across the cavity (viewport z-fighting, and the topmost
+    // sheet masks the floor fillet). The overshoot is swallowed inside the
+    // strictly wider step above (innerCS itself at the top, matching the main
+    // column below its own CSG_EPSILON overshoot), so no junction depends on
+    // bit-exact plane matching.
+    return cs.extrude(stepH + CSG_EPSILON).translate([0, 0, floorZ + i * stepH]);
   });
   cavity.push(
     innerCS.extrude(totalHeight - floorZ - FILLET_R + CSG_EPSILON).translate([0, 0, floorZ + FILLET_R]),
