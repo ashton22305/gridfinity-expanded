@@ -1,0 +1,28 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  height: 48px;
+  flex-shrink: 0;
+  background: #111115;
+  border-bottom: 1px solid #2a2a32;
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.viewerPane {
+  flex: 1;
+  overflow: hidden;
+}
