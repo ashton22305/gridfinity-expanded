@@ -7,7 +7,8 @@ Browser-based Gridfinity bin generator. Supports non-rectangular (tetris-piece) 
 | Concern | Library | Why |
 |---|---|---|
 | Framework | React 18 + Vite 6 | Stable, GitHub Pages deploy |
-| Geometry | `@jscad/modeling` | Programmatic CSG in TypeScript; no WASM for MVP |
+| Geometry (authoring) | `@jscad/modeling` | Programmatic CSG in TypeScript; builds the 2D profiles and primitive solids |
+| Geometry (booleans) | `manifold-3d` (WASM) | Guaranteed watertight, 2-manifold output — JSCAD's mesh booleans leave non-manifold T-junctions and its `offset()` self-intersects on thick walls |
 | 3D preview | Babylon.js | Microsoft-maintained; TypeScript-first |
 | Bundler | Vite 6 (rollup) | Vite 8 rolldown OOMs on large @jscad bundles |
 | Styling | CSS Modules | Ready for shadcn/ui or similar later |
@@ -21,11 +22,13 @@ src/
     types.ts              shared types: BinConfig, GridCell, PrinterProfile
     printers.ts           printer profiles + bed-fit calculation
     geometry/
-      gridfinity.ts       JSCAD CSG: generates Gridfinity bin Geom3
+      gridfinity.ts       builds profiles/primitives; generateBinManifold() is the
+                          default path, generateBin() (pure JSCAD) is the fallback
+      manifold.ts         manifold-3d WASM init + JSCAD→manifold bridge + output weld
     export/
-      stl.ts              STL blob download helper
+      stl.ts              STL download helper + meshToStl() (indexed mesh → binary STL)
   workers/
-    geometry.worker.ts    Web Worker: runs JSCAD off the main thread
+    geometry.worker.ts    Web Worker: manifold path (STL via meshToStl), JSCAD fallback
   hooks/
     useBinGeometry.ts     debounces config changes, drives worker, exposes STL buffer
   components/
@@ -58,10 +61,10 @@ src/
 
 ## Adding features
 
-- **New bin parameter** → add to `BinConfig` in `types.ts`, update `gridfinity.ts`, add control in the appropriate tab component.
+- **New bin parameter** → add to `BinConfig` in `types.ts`, update `gridfinity.ts` (both `generateBinManifold` and the `generateBin` fallback), add control in the appropriate tab component.
 - **New tab** → add to `TABS` in `Sidebar.tsx`, create `src/components/sidebar/tabs/MyTab.tsx`.
 - **New export format** → add serializer in `lib/export/`, add option to `ExportMenu.tsx`.
-- **Performance** → geometry is already in a Web Worker; if generation is still slow, consider manifold-wasm as a drop-in replacement for JSCAD's boolean operations.
+- **Manifold correctness** → after any geometry change, run `npm run check:manifold`. It builds every config in the test matrix and asserts the exported STL is watertight and 2-manifold (no boundary/non-manifold edges, degenerate or duplicate faces). Combine solids with manifold booleans and do inward 2D offsets with `CrossSection.offset` (never JSCAD `offset()` for large inward deltas — it self-intersects). Feed the manifold engine only individually-closed primitives, and keep stacked junctions **flush** (manifold fuses coincident faces exactly; overlaps of differing cross-sections leave slivers).
 - **Theming** → CSS Modules are used everywhere. When adding shadcn/ui: install it, wrap the app in its provider, and progressively replace CSS Module components.
 
 ## Local dev

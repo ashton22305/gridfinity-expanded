@@ -1,5 +1,7 @@
 import { primitives, booleans, expansions, extrusions, transforms, hulls } from '@jscad/modeling';
+import type { ManifoldToplevel, Manifold } from 'manifold-3d';
 import type { BinConfig, GridCell } from '../types';
+import { geom3ToManifold, geom2ToCrossSection, manifoldMesh, type BinMesh } from './manifold';
 
 // ── Spec constants ─────────────────────────────────────────────────────────────
 // All dimensions in mm. Reference: kennetek/gridfinity-rebuilt-openscad
@@ -66,26 +68,40 @@ function roundedRect(cx: number, cy: number, w: number, h: number, r: number): G
   ) as Geom2;
 }
 
-/** Thin disc extrusion used as a loft anchor in hull(). */
+/** Thin disc extrusion used as a loft anchor in hull(), sitting just above z. */
 function disc(z: number, profile: Geom2): Geom3 {
   return transforms.translate([0, 0, z],
     extrusions.extrudeLinear({ height: CSG_EPSILON }, profile)) as Geom3;
 }
 
+/** Loft anchor whose TOP face lands exactly on z (sits just below it). */
+function discTop(z: number, profile: Geom2): Geom3 {
+  return disc(z - CSG_EPSILON, profile);
+}
+
 // ── Geometry builders ──────────────────────────────────────────────────────────
 
-/** Per-cell Gridfinity connector peg (z = 0 → PEG_HEIGHT). */
-function buildPeg(cx: number, cy: number): Geom3 {
+/**
+ * Per-cell Gridfinity connector peg (z = 0 → PEG_HEIGHT), returned as its three
+ * convex sections rather than a single union. Each section is individually a
+ * valid closed solid — what the manifold engine requires of its inputs — and the
+ * sections meet flush at z = PEG_Z1, PEG_Z2 and PEG_HEIGHT: each hull's upper
+ * loft anchor is top-aligned to its junction plane so no section overshoots into
+ * the next. Flush coincident faces let the robust boolean fuse them without the
+ * sub-micron slivers an overlap would leave. (The JSCAD fallback just unions the
+ * three; its output is non-manifold regardless.)
+ */
+function pegSections(cx: number, cy: number): Geom3[] {
   const bottom = roundedRect(cx, cy, PEG_W_BOTTOM, PEG_W_BOTTOM, PEG_R_BOTTOM);
   const mid    = roundedRect(cx, cy, PEG_W_MID,    PEG_W_MID,    PEG_R_MID);
   const top    = roundedRect(cx, cy, PEG_W_TOP,    PEG_W_TOP,    PEG_R_TOP);
 
-  return booleans.union(
-    hulls.hull(disc(0,      bottom), disc(PEG_Z1,     mid)),  // bottom chamfer
+  return [
+    hulls.hull(disc(0, bottom), discTop(PEG_Z1, mid)) as Geom3,       // bottom chamfer → [0, PEG_Z1]
     transforms.translate([0, 0, PEG_Z1],
-      extrusions.extrudeLinear({ height: PEG_Z2 - PEG_Z1 }, mid)) as Geom3,  // vertical wall
-    hulls.hull(disc(PEG_Z2, mid),    disc(PEG_HEIGHT, top)),  // upper chamfer
-  ) as Geom3;
+      extrusions.extrudeLinear({ height: PEG_Z2 - PEG_Z1 }, mid)) as Geom3,  // vertical wall → [PEG_Z1, PEG_Z2]
+    hulls.hull(disc(PEG_Z2, mid), discTop(PEG_HEIGHT, top)) as Geom3, // upper chamfer → [PEG_Z2, PEG_HEIGHT]
+  ];
 }
 
 /** 2D outer wall profile derived from the cell footprint. */
@@ -111,11 +127,15 @@ function buildOuterProfile(cells: GridCell[], cornerRadius: number): Geom2 {
 
 /** Connector pegs for all cells unified with the solid bridge and bin walls. */
 function buildShell(cells: GridCell[], totalHeight: number, outerProfile: Geom2): Geom3 {
-  const pegs: Geom3 = union(cells.map(({ x, y }) =>
-    buildPeg(x * GRID_PITCH + GRID_PITCH / 2, y * GRID_PITCH + GRID_PITCH / 2)
+  const pegs: Geom3 = union(cells.flatMap(({ x, y }) =>
+    pegSections(x * GRID_PITCH + GRID_PITCH / 2, y * GRID_PITCH + GRID_PITCH / 2)
   ));
-  const body: Geom3 = transforms.translate([0, 0, PEG_HEIGHT],
-    extrusions.extrudeLinear({ height: totalHeight - PEG_HEIGHT }, outerProfile)) as Geom3;
+  // Start the body CSG_EPSILON below the peg tops so the two solids overlap in
+  // volume. A flush z = PEG_HEIGHT junction is a coplanar kiss between mismatched
+  // cross-sections (rounded peg top vs. the outer wall), which the boolean fails
+  // to fuse and exports as non-manifold seams.
+  const body: Geom3 = transforms.translate([0, 0, PEG_HEIGHT - CSG_EPSILON],
+    extrusions.extrudeLinear({ height: totalHeight - PEG_HEIGHT + CSG_EPSILON }, outerProfile)) as Geom3;
 
   return booleans.union(pegs, body) as Geom3;
 }
@@ -137,8 +157,12 @@ function buildCavity(outerProfile: Geom2, totalHeight: number, wallThickness: nu
     const prof: Geom2 = (inset > 0.001
       ? expansions.offset({ delta: -inset, corners: 'round', segments: 16 }, innerProfile)
       : innerProfile) as Geom2;
+    // Overlap into the next step (and, on the last step, into `main`) by
+    // CSG_EPSILON so the union merges through a real volume. The residual
+    // T-junctions between differing step cross-sections are cleaned up by the
+    // sanitizer (makeManifold) in the export path.
     return transforms.translate([0, 0, floorZ + i * stepH],
-      extrusions.extrudeLinear({ height: stepH }, prof)) as Geom3;
+      extrusions.extrudeLinear({ height: stepH + CSG_EPSILON }, prof)) as Geom3;
   });
 
   const fillet: Geom3 = union(filletPrisms);
@@ -184,4 +208,67 @@ export function generateBin(config: BinConfig): Geom3 {
   if (magnetHoles) bin = booleans.subtract(bin, ...buildFastenerHoles(cells, MAGNET_RADIUS, MAGNET_DEPTH, 32)) as Geom3;
   if (screwHoles)  bin = booleans.subtract(bin, ...buildFastenerHoles(cells, SCREW_RADIUS,  SCREW_DEPTH,  16)) as Geom3;
   return bin;
+}
+
+/**
+ * Manifold-engine build path — the default. Produces a guaranteed watertight,
+ * 2-manifold triangle mesh with no self-intersections, so slicers never report
+ * "non-manifold edge" errors.
+ *
+ * JSCAD's mesh booleans leave T-junctions along every curved cut and its 2D
+ * `offset()` self-intersects once the inward distance exceeds a corner radius
+ * (e.g. a thick wall on a rounded bin). Both defects export as non-manifold
+ * geometry. Here JSCAD is used only to author the individual solids (each a
+ * valid closed primitive) and 2D profiles; the manifold engine performs every
+ * boolean and every inward offset (via Clipper2, which cannot self-intersect).
+ */
+export function generateBinManifold(wasm: ManifoldToplevel, config: BinConfig): BinMesh {
+  const { Manifold } = wasm;
+  const { cells, heightUnits, wallThickness, cornerRadius, magnetHoles, screwHoles } = config;
+
+  if (cells.length === 0) {
+    return manifoldMesh(geom3ToManifold(wasm, primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3));
+  }
+
+  const totalHeight  = BASE_TOTAL_HEIGHT + HEIGHT_PER_UNIT * Math.max(1, heightUnits);
+  const outerProfile = buildOuterProfile(cells, cornerRadius);
+  const outerCS      = geom2ToCrossSection(wasm, outerProfile);
+
+  // Positive solids: the connector pegs plus the extruded body/wall column.
+  const solids: Manifold[] = cells.flatMap(({ x, y }) =>
+    pegSections(x * GRID_PITCH + GRID_PITCH / 2, y * GRID_PITCH + GRID_PITCH / 2)
+      .map((s) => geom3ToManifold(wasm, s)),
+  );
+  // Flush at z = PEG_HEIGHT: the robust boolean fuses the coincident interface
+  // exactly, so no overlap is needed (and none is wanted — an overlap of
+  // differing cross-sections would leave slivers).
+  solids.push(outerCS.extrude(totalHeight - PEG_HEIGHT).translate([0, 0, PEG_HEIGHT]));
+  let bin = Manifold.union(solids);
+
+  // Cavity: a stack of concave-fillet prisms (floorZ → floorZ+FILLET_R) capped by
+  // the straight inner column, which pokes CSG_EPSILON past the rim so the top
+  // cut opens cleanly. Clipper2 offsets stay valid at any wall thickness; the
+  // fillet slices meet flush.
+  const innerCS = outerCS.offset(-wallThickness, 'Miter', 2);
+  const floorZ  = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
+  const stepH   = FILLET_R / FILLET_STEPS;
+  const cavity: Manifold[] = Array.from({ length: FILLET_STEPS }, (_, i) => {
+    const t     = (i + 0.5) / FILLET_STEPS;
+    const inset = FILLET_R * (1 - Math.sqrt(Math.max(0, 2 * t - t * t)));
+    const cs    = inset > 0.001 ? innerCS.offset(-inset, 'Miter', 2) : innerCS;
+    return cs.extrude(stepH).translate([0, 0, floorZ + i * stepH]);
+  });
+  cavity.push(
+    innerCS.extrude(totalHeight - floorZ - FILLET_R + CSG_EPSILON).translate([0, 0, floorZ + FILLET_R]),
+  );
+  bin = bin.subtract(Manifold.union(cavity));
+
+  // Fastener pockets (magnet recess and/or M3 pilot), subtracted as one union.
+  const holes: Manifold[] = [
+    ...(magnetHoles ? buildFastenerHoles(cells, MAGNET_RADIUS, MAGNET_DEPTH, 32) : []),
+    ...(screwHoles  ? buildFastenerHoles(cells, SCREW_RADIUS,  SCREW_DEPTH,  16) : []),
+  ].map((h) => geom3ToManifold(wasm, h));
+  if (holes.length) bin = bin.subtract(Manifold.union(holes));
+
+  return manifoldMesh(bin);
 }
