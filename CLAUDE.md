@@ -19,18 +19,23 @@ Browser-based Gridfinity bin generator. Supports non-rectangular (tetris-piece) 
 ```
 src/
   lib/
-    types.ts              shared types: BinConfig, GridCell, PrinterProfile
-    printers.ts           printer profiles + bed-fit calculation
+    types.ts              shared types: BinConfig, GridCell, GridEdge, SplitLine, PrinterProfile
+    edges.ts              pure grid-edge helpers: perimeter/internal classification,
+                          effectiveWalls() (resolves open/divider config per bin or piece)
+    split.ts              pure split-line partitioning (partitionCells)
+    printers.ts           printer profiles, bed fit, computeAutoSplitLines/checkPieceFit
     geometry/
-      gridfinity.ts       builds profiles/primitives; generateBinManifold() is the
-                          default path, generateBin() (pure JSCAD) is the fallback
+      gridfinity.ts       geometry: generateBinManifold() (whole bin) and
+                          generateBinPieces() (split-aware, one solid per piece +
+                          exploded preview) are the default path; generateBin()/
+                          generateBinPiecesJscad() (pure JSCAD) are the fallback
       manifold.ts         manifold-3d WASM init + JSCAD→manifold bridge + output weld
     export/
       stl.ts              STL download helper + meshToStl() (indexed mesh → binary STL)
   workers/
-    geometry.worker.ts    Web Worker: manifold path (STL via meshToStl), JSCAD fallback
+    geometry.worker.ts    Web Worker: returns preview STL + one STL per split piece
   hooks/
-    useBinGeometry.ts     debounces config changes, drives worker, exposes STL buffer
+    useBinGeometry.ts     debounces config changes, drives worker; exposes previewBuffer + pieces
   components/
     layout/
       AppLayout.tsx       two-column layout (sidebar + viewer)
@@ -38,12 +43,14 @@ src/
       Sidebar.tsx         tabbed left panel
       tabs/
         ShapeTab.tsx      click/drag grid cell editor (6×6)
-        DimensionsTab.tsx height units (1–8u), wall thickness
+        WallsTab.tsx      SVG edge editor: remove outer walls, add dividers
+        SplitTab.tsx      SVG split-line editor (auto-from-bed / manual) + piece fit
+        DimensionsTab.tsx height, wall thickness, cavity corner radius, inner fillet
         PrinterTab.tsx    printer presets + bed-fit warning
     viewer/
       BabylonViewer.tsx   Babylon.js canvas; reloads mesh on stlBuffer change
-    ExportMenu.tsx        Export STL button
-  App.tsx                 root: owns BinConfig + PrinterProfile state
+    ExportMenu.tsx        Export STL button (dropdown per piece when split)
+  App.tsx                 root: owns BinConfig + PrinterProfile state; auto-split effect
 ```
 
 ## Gridfinity dimensions (key constants in gridfinity.ts)
@@ -58,6 +65,22 @@ src/
 | `MAGNET_RADIUS` | 3.25 mm | 6.5 mm OD N52 disc magnets |
 | `MAGNET_DEPTH` | 2.4 mm | 2 mm magnet + 0.4 mm tolerance |
 | `MAGNET_INSET` | 13.5 mm | from cell centre to magnet centre |
+
+Geometry semantics worth knowing:
+
+- The **outer wall is always the Gridfinity spec profile** (41.5 mm/cell, 3.75 mm
+  corners = `PEG_R_TOP`). `cavityCornerRadius` rounds only the cavity interior
+  (a Clipper2 morphological opening, binary-search-clamped so the cavity never
+  collapses); `innerFilletRadius` is the floor-to-wall fillet.
+- Walls are per-edge: `openEdges` removes perimeter walls, `dividerEdges` adds
+  internal ones. The cavity cross-section is authored as plain rects in
+  `planCavity()` (cell squares minus wall/divider strips + concave-corner
+  patches), shared by both build paths. Rounding and fillet insets operate on
+  the cavity *extended through its open faces*, then intersect back — otherwise
+  they retreat at open/seam faces and grow ribs on glue surfaces.
+- Split pieces are independent bins; seam edges are open unless a divider sits
+  exactly on the split line. Stale edge/line config entries are ignored by the
+  geometry layer, never migrated.
 
 ## Adding features
 

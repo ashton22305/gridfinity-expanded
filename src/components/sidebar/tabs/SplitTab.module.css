@@ -1,0 +1,119 @@
+.tab {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  user-select: none;
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.modeRow {
+  display: flex;
+  gap: 6px;
+}
+
+.modeButton {
+  all: unset;
+  flex: 1;
+  text-align: center;
+  padding: 6px 0;
+  border-radius: 5px;
+  font-size: 0.8rem;
+  background: #2a2a30;
+  border: 1px solid #3a3a42;
+  color: #aaa;
+  cursor: pointer;
+}
+
+.modeButton:hover {
+  background: #3a3a45;
+}
+
+.modeActive {
+  background: #2563eb;
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+.modeActive:hover {
+  background: #3b82f6;
+}
+
+.editor {
+  width: 100%;
+  aspect-ratio: 1;
+  touch-action: none;
+}
+
+.bgRect {
+  fill: #232328;
+  stroke: none;
+}
+
+.cellRect {
+  fill: #2a2a30;
+  stroke: #3a3a42;
+  stroke-width: 1;
+}
+
+.lineHit {
+  cursor: pointer;
+}
+
+.lineStatic {
+  cursor: default;
+}
+
+.hitLine {
+  stroke: transparent;
+  stroke-width: 12;
+  stroke-linecap: round;
+}
+
+.splitLine {
+  stroke: #f59e0b;
+  stroke-width: 3;
+  stroke-dasharray: 7 4;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.lineHit:hover .splitLine {
+  stroke: #fbbf24;
+}
+
+.ghostLine {
+  stroke: #4a4a55;
+  stroke-width: 1;
+  stroke-dasharray: 2 5;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.lineHit:hover .ghostLine {
+  stroke: #f59e0b;
+  stroke-width: 2;
+}
+
+.fitInfo {
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.fits {
+  background: rgba(34, 197, 94, 0.1);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+
+.noFit {
+  background: rgba(245, 158, 11, 0.1);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}

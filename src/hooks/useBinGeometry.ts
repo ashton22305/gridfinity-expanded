@@ -3,19 +3,26 @@ import type { BinConfig } from '../lib/types';
 
 const DEBOUNCE_MS = 350;
 
+export interface PieceStl {
+  name: string;
+  buffer: ArrayBuffer;
+}
+
 interface GeometryState {
-  stlBuffer: ArrayBuffer | null;
+  previewBuffer: ArrayBuffer | null;
+  pieces: PieceStl[];
   generating: boolean;
   error: string | null;
 }
 
 type WorkerResult =
-  | { ok: true; buffer: ArrayBuffer; requestId: number }
+  | { ok: true; preview: ArrayBuffer; pieces: PieceStl[]; requestId: number }
   | { ok: false; error: string; requestId: number };
 
 export function useBinGeometry(config: BinConfig): GeometryState {
   const [state, setState] = useState<GeometryState>({
-    stlBuffer: null,
+    previewBuffer: null,
+    pieces: [],
     generating: false,
     error: null,
   });
@@ -39,7 +46,7 @@ export function useBinGeometry(config: BinConfig): GeometryState {
       const data = e.data;
       if (data.requestId !== requestIdRef.current) return; // superseded — discard stale result
       if (data.ok) {
-        setState({ stlBuffer: data.buffer, generating: false, error: null });
+        setState({ previewBuffer: data.preview, pieces: data.pieces, generating: false, error: null });
       } else {
         setState((s) => ({ ...s, generating: false, error: data.error }));
       }

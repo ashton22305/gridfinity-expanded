@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import type { BinConfig, PrinterProfile } from '../../lib/types';
 import { ShapeTab } from './tabs/ShapeTab';
+import { WallsTab } from './tabs/WallsTab';
+import { SplitTab } from './tabs/SplitTab';
 import { DimensionsTab } from './tabs/DimensionsTab';
 import { FeaturesTab } from './tabs/FeaturesTab';
 import { PrinterTab } from './tabs/PrinterTab';
 import styles from './Sidebar.module.css';
 
-const TABS = ['Shape', 'Dimensions', 'Features', 'Printer'] as const;
+const TABS = ['Shape', 'Walls', 'Split', 'Dimensions', 'Features', 'Printer'] as const;
 type Tab = (typeof TABS)[number];
 
 interface Props {
@@ -37,6 +39,16 @@ export function Sidebar({ config, onConfigChange, printerProfile, onPrinterChang
       <div className={styles.tabPanel} role="tabpanel">
         {activeTab === 'Shape' && (
           <ShapeTab config={config} onChange={onConfigChange} />
+        )}
+        {activeTab === 'Walls' && (
+          <WallsTab config={config} onChange={onConfigChange} />
+        )}
+        {activeTab === 'Split' && (
+          <SplitTab
+            config={config}
+            onChange={onConfigChange}
+            printerProfile={printerProfile}
+          />
         )}
         {activeTab === 'Dimensions' && (
           <DimensionsTab config={config} onChange={onConfigChange} />

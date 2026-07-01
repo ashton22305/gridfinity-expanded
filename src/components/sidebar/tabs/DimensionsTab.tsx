@@ -35,40 +35,43 @@ export function DimensionsTab({ config, onChange }: Props) {
         <span className={styles.label}>Wall thickness</span>
         <div className={styles.inputRow}>
           <input
-            type="number"
+            type="range"
             min={0.8}
             max={4}
             step={0.1}
             value={config.wallThickness}
-            onChange={(e) => {
-              const v = parseFloat(e.target.value);
-              if (!isNaN(v) && v >= 0.4) onChange({ ...config, wallThickness: v });
-            }}
-            className={styles.numberInput}
+            onChange={(e) => onChange({ ...config, wallThickness: Number(e.target.value) })}
+            className={styles.slider}
           />
-          <span className={styles.unit}>mm</span>
+          <span className={styles.value}>
+            {config.wallThickness.toFixed(1)}
+            <span className={styles.mm}> mm</span>
+          </span>
         </div>
         <p className={styles.hint}>1.2 mm = 1 nozzle width (fastest print)</p>
       </label>
 
       <label className={styles.field}>
-        <span className={styles.label}>Corner radius</span>
+        <span className={styles.label}>Cavity corner radius</span>
         <div className={styles.inputRow}>
           <input
             type="range"
             min={0}
-            max={6}
+            max={20}
             step={0.25}
-            value={config.cornerRadius}
-            onChange={(e) => onChange({ ...config, cornerRadius: Number(e.target.value) })}
+            value={config.cavityCornerRadius}
+            onChange={(e) => onChange({ ...config, cavityCornerRadius: Number(e.target.value) })}
             className={styles.slider}
           />
           <span className={styles.value}>
-            {config.cornerRadius.toFixed(2)}
+            {config.cavityCornerRadius.toFixed(2)}
             <span className={styles.mm}> mm</span>
           </span>
         </div>
-        <p className={styles.hint}>3.75 mm matches standard Gridfinity baseplates</p>
+        <p className={styles.hint}>
+          Rounds the inside corners only — the outer wall always follows the
+          Gridfinity spec. Channels narrower than 2× the radius get filled.
+        </p>
       </label>
 
       <label className={styles.field}>
@@ -77,7 +80,7 @@ export function DimensionsTab({ config, onChange }: Props) {
           <input
             type="range"
             min={0}
-            max={3}
+            max={10}
             step={0.25}
             value={config.innerFilletRadius}
             onChange={(e) => onChange({ ...config, innerFilletRadius: Number(e.target.value) })}
