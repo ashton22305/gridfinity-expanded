@@ -16,9 +16,15 @@ interface Props {
   onConfigChange: (next: BinConfig) => void;
   printerProfile: PrinterProfile;
   onPrinterChange: (next: PrinterProfile) => void;
+  gridCols: number;
+  gridRows: number;
+  onGridSizeChange: (cols: number, rows: number) => void;
 }
 
-export function Sidebar({ config, onConfigChange, printerProfile, onPrinterChange }: Props) {
+export function Sidebar({
+  config, onConfigChange, printerProfile, onPrinterChange,
+  gridCols, gridRows, onGridSizeChange,
+}: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('Shape');
 
   return (
@@ -38,16 +44,29 @@ export function Sidebar({ config, onConfigChange, printerProfile, onPrinterChang
       </div>
       <div className={styles.tabPanel} role="tabpanel">
         {activeTab === 'Shape' && (
-          <ShapeTab config={config} onChange={onConfigChange} />
+          <ShapeTab
+            config={config}
+            onChange={onConfigChange}
+            gridCols={gridCols}
+            gridRows={gridRows}
+            onGridSizeChange={onGridSizeChange}
+          />
         )}
         {activeTab === 'Walls' && (
-          <WallsTab config={config} onChange={onConfigChange} />
+          <WallsTab
+            config={config}
+            onChange={onConfigChange}
+            gridCols={gridCols}
+            gridRows={gridRows}
+          />
         )}
         {activeTab === 'Split' && (
           <SplitTab
             config={config}
             onChange={onConfigChange}
             printerProfile={printerProfile}
+            gridCols={gridCols}
+            gridRows={gridRows}
           />
         )}
         {activeTab === 'Dimensions' && (

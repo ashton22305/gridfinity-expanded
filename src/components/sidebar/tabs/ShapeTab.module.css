@@ -11,22 +11,88 @@
   color: #888;
 }
 
+.sizeRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #aaa;
+}
+
+.sizeInput {
+  width: 52px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  border: 1px solid #3a3a42;
+  background: #2a2a30;
+  color: #ddd;
+  font-size: 0.8rem;
+}
+
+.times {
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.binRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.binButton {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  background: #2a2a30;
+  border: 1px solid #3a3a42;
+  color: #bbb;
+  cursor: pointer;
+}
+
+.binButton:hover {
+  background: #3a3a45;
+}
+
+.binActive {
+  border-color: var(--bin-color);
+  color: #fff;
+}
+
+.binSwatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--bin-color);
+}
+
 .grid {
   display: grid;
-  gap: 4px;
   width: 100%;
-  aspect-ratio: 1;
   touch-action: none;
 }
 
 .cell {
   all: unset;
   aspect-ratio: 1;
-  border-radius: 3px;
+  border-radius: 2px;
   background: #2a2a30;
   border: 1px solid #3a3a42;
   cursor: pointer;
   transition: background 0.08s, border-color 0.08s;
+  min-width: 0;
+  min-height: 0;
 }
 
 .cell:hover {
@@ -34,13 +100,8 @@
   border-color: #5a5a6a;
 }
 
-.cell.selected {
-  background: #2563eb;
-  border-color: #3b82f6;
-}
-
 .cell.selected:hover {
-  background: #3b82f6;
+  filter: brightness(1.2);
 }
 
 .stats {

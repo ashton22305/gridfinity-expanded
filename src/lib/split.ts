@@ -47,3 +47,18 @@ export function partitionCells(cells: GridCell[], splitLines: SplitLine[]): Piec
 export function sortSplitLines(lines: SplitLine[]): SplitLine[] {
   return [...lines].sort((a, b) => a.axis.localeCompare(b.axis) || a.index - b.index);
 }
+
+/** Groups cells by logical bin id (ascending). Cells without an id are bin 0. */
+export function groupBins(cells: GridCell[]): { id: number; cells: GridCell[] }[] {
+  const map = new Map<number, GridCell[]>();
+  for (const c of cells) {
+    const id = c.bin ?? 0;
+    let group = map.get(id);
+    if (!group) {
+      group = [];
+      map.set(id, group);
+    }
+    group.push(c);
+  }
+  return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([id, group]) => ({ id, cells: group }));
+}

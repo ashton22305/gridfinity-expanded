@@ -174,7 +174,8 @@ const v = (x: number, y: number): GridEdge => ({ orientation: 'v', x, y });
 const base: Omit<BinConfig, 'cells'> = {
   heightUnits: 3, wallThickness: 1.2, cavityCornerRadius: 3.75, innerFilletRadius: 0.5,
   magnetHoles: true, screwHoles: false,
-  openEdges: [], dividerEdges: [], splitMode: 'manual', splitLines: [],
+  openEdges: [], dividerEdges: [], innerWalls: [], splitMode: 'manual', splitLines: [],
+  baseAngle: 0, baseSlopeDir: '+y',
 };
 
 const cases: { name: string; config: BinConfig }[] = [
@@ -210,6 +211,28 @@ const cases: { name: string; config: BinConfig }[] = [
   { name: '1x1 rc20 (clamp)',    config: { ...base, cells: rect(1, 1), cavityCornerRadius: 20 } },
   { name: '3x3 rc20 + dividers', config: { ...base, cells: rect(3, 3), cavityCornerRadius: 20, dividerEdges: [v(1, 0), v(1, 1), v(1, 2)] } },
   { name: 'rc20 fillet10 thick', config: { ...base, cells: rect(2, 2), cavityCornerRadius: 20, innerFilletRadius: 10, wallThickness: 4 } },
+  // Free-form inner walls
+  { name: 'diag wall full',      config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 6, y1: 6, x2: 78, y2: 78, width: 1.6, height: null }] } },
+  { name: 'low wall ramps',      config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 0, y1: 40, x2: 84, y2: 44, width: 2, height: 8 }] } },
+  { name: 'low wall to open',    config: { ...base, cells: rect(1, 1), openEdges: [v(1, 0)], innerWalls: [{ x1: 0, y1: 21, x2: 42, y2: 21, width: 1.2, height: 6 }] } },
+  { name: 'low wall x divider',  config: { ...base, cells: rect(3, 1), dividerEdges: [v(1, 0)], innerWalls: [{ x1: 4, y1: 10, x2: 122, y2: 32, width: 1.6, height: 7 }] } },
+  { name: 'crossing wall hts',   config: { ...base, cells: rect(2, 2), innerWalls: [
+      { x1: 0, y1: 21, x2: 84, y2: 21, width: 1.6, height: 6 },
+      { x1: 43, y1: 0, x2: 41, y2: 84, width: 2, height: 14 },
+    ] } },
+  { name: 'wall rc20 fillet6',   config: { ...base, cells: rect(2, 2), cavityCornerRadius: 20, innerFilletRadius: 6, innerWalls: [{ x1: 0, y1: 30, x2: 84, y2: 60, width: 1.6, height: 8 }] } },
+  { name: 'wall in wall band',   config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 0, y1: 0.5, x2: 84, y2: 0.5, width: 1, height: null }] } },
+  // Sloped base
+  { name: 'slope 15 +y',         config: { ...base, cells: rect(2, 2), baseAngle: 15, baseSlopeDir: '+y' } },
+  { name: 'slope 30 -x fillet3', config: { ...base, cells: rect(1, 1), baseAngle: 30, baseSlopeDir: '-x', innerFilletRadius: 3 } },
+  { name: 'L slope 20 rc6',      config: { ...base, cells: L, baseAngle: 20, baseSlopeDir: '+x', cavityCornerRadius: 6 } },
+  { name: 'slope 45 h1 clamp',   config: { ...base, cells: rect(2, 1), heightUnits: 1, baseAngle: 45, baseSlopeDir: '-y' } },
+  { name: 'slope + low wall',    config: { ...base, cells: rect(2, 2), baseAngle: 12, baseSlopeDir: '+x', innerWalls: [{ x1: 0, y1: 42, x2: 84, y2: 42, width: 1.6, height: 9 }] } },
+  // Multiple distinct bins
+  { name: '2 bins adjacent',     config: { ...base, cells: [
+      { x: 0, y: 0, bin: 0 }, { x: 0, y: 1, bin: 0 },
+      { x: 1, y: 0, bin: 1 }, { x: 1, y: 1, bin: 1 },
+    ] } },
 ];
 
 const U: GridCell[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 0, y: 1 }, { x: 2, y: 1 }];
@@ -220,6 +243,11 @@ const splitCases: { name: string; config: BinConfig }[] = [
   { name: '4x2 divider on seam', config: { ...base, cells: rect(4, 2), splitLines: [{ axis: 'x', index: 2 }], dividerEdges: [v(2, 0), v(2, 1)] } },
   { name: 'L split (empty box)', config: { ...base, cells: L, splitLines: [{ axis: 'x', index: 1 }, { axis: 'y', index: 1 }] } },
   { name: 'U split (disjoint)',  config: { ...base, cells: U, splitLines: [{ axis: 'y', index: 1 }] } },
+  { name: 'wall across seam',    config: { ...base, cells: rect(4, 1), splitLines: [{ axis: 'x', index: 2 }], innerWalls: [{ x1: 10, y1: 21, x2: 158, y2: 21, width: 1.6, height: 8 }] } },
+  { name: 'slope across seam',   config: { ...base, cells: rect(6, 1), baseAngle: 8, baseSlopeDir: '-x', splitLines: [{ axis: 'x', index: 3 }] } },
+  { name: '2 bins + split',      config: { ...base, cells: [
+      { x: 0, y: 0, bin: 0 }, { x: 1, y: 0, bin: 0 }, { x: 2, y: 0, bin: 1 }, { x: 3, y: 0, bin: 1 },
+    ], splitLines: [{ axis: 'x', index: 1 }] } },
 ];
 
 (async () => {

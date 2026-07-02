@@ -1,8 +1,8 @@
 import { primitives, booleans, expansions, extrusions, transforms, hulls, measurements } from '@jscad/modeling';
 import type { ManifoldToplevel, Manifold, CrossSection } from 'manifold-3d';
-import type { BinConfig, GridCell } from '../types';
+import type { BinConfig, GridCell, InnerWall } from '../types';
 import { effectiveWalls, edgeInsideCell, cellSet, type EffectiveWalls } from '../edges';
-import { partitionCells } from '../split';
+import { partitionCells, groupBins } from '../split';
 import { geom3ToManifold, geom2ToCrossSection, manifoldMesh, type BinMesh } from './manifold';
 
 // ── Spec constants ─────────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ const PEG_R_TOP    = 3.75;
 // User-facing corner rounding applies to the cavity interior only.
 const OUTER_R = PEG_R_TOP;
 
-const FLOOR_THICKNESS = 1.2;
+export const FLOOR_THICKNESS = 1.2;
 
 // Floor fillet: concave quarter-circle at the cavity floor-to-wall junction.
 // Uses stacked extrude prisms rather than hull() — hull fills concave notches
@@ -58,6 +58,59 @@ const FASTENER_INSET = 13.0;   // ±mm from cell centre to pocket centre
 const CSG_EPSILON = 0.01;      // overlap to prevent coplanar faces in boolean ops
 
 const EXPLODE_GAP = 4;         // preview gap between split pieces, per split line
+
+// Free-form inner walls: embedded into the floor for a solid union, with a
+// concave quarter-round ramp (radius TRANSITION_R, clamped to the available
+// headroom) wherever a lower wall meets taller structure.
+const WALL_EMBED   = 0.5;
+const TRANSITION_R = 4;
+
+/** Footprint quad of an inner-wall segment, CCW, extended CSG_EPSILON past each
+ *  endpoint so an end landing exactly on a cavity face overlaps into the wall
+ *  band instead of kissing it flush. Returns null for degenerate segments. */
+function innerWallQuad(w: InnerWall): [number, number][] | null {
+  const len = Math.hypot(w.x2 - w.x1, w.y2 - w.y1);
+  if (len < 0.1) return null;
+  const hw = Math.max(0.4, w.width) / 2;
+  const ux = (w.x2 - w.x1) / len, uy = (w.y2 - w.y1) / len;
+  const nx = -uy, ny = ux;
+  const x1 = w.x1 - ux * CSG_EPSILON, y1 = w.y1 - uy * CSG_EPSILON;
+  const x2 = w.x2 + ux * CSG_EPSILON, y2 = w.y2 + uy * CSG_EPSILON;
+  return [
+    [x1 - nx * hw, y1 - ny * hw],
+    [x2 - nx * hw, y2 - ny * hw],
+    [x2 + nx * hw, y2 + ny * hw],
+    [x1 + nx * hw, y1 + ny * hw],
+  ];
+}
+
+/** Top z of an inner wall; lands exactly on totalHeight when full height. */
+function innerWallTop(w: InnerWall, floorZ: number, totalHeight: number): number {
+  const cavityDepth = totalHeight - floorZ;
+  if (w.height == null || w.height >= cavityDepth) return totalHeight;
+  return floorZ + Math.max(0.5, w.height);
+}
+
+/** Unit 2D ascent direction of the sloped base (floor rises AWAY from the low side). */
+function slopeAscent(dir: BinConfig['baseSlopeDir']): [number, number] {
+  switch (dir) {
+    case '+x': return [-1, 0];  // low at +x → rises toward -x
+    case '-x': return [1, 0];
+    case '+y': return [0, -1];
+    default:   return [0, 1];   // '-y'
+  }
+}
+
+/** mm bounding box of a cell set. */
+function cellBounds(cells: GridCell[]): { minX: number; minY: number; maxX: number; maxY: number } {
+  const xs = cells.map((c) => c.x), ys = cells.map((c) => c.y);
+  return {
+    minX: Math.min(...xs) * GRID_PITCH,
+    minY: Math.min(...ys) * GRID_PITCH,
+    maxX: (Math.max(...xs) + 1) * GRID_PITCH,
+    maxY: (Math.max(...ys) + 1) * GRID_PITCH,
+  };
+}
 
 // ── JSCAD type aliases ─────────────────────────────────────────────────────────
 // expansions.offset() returns the Geometry union type, which breaks JSCAD's
@@ -266,9 +319,13 @@ function buildFastenerHoles(
   });
 }
 
-/** Resolves config walls against the (piece) cell set, dropping stale entries. */
-function resolveWalls(pieceCells: GridCell[], config: BinConfig): EffectiveWalls {
-  return effectiveWalls(pieceCells, config.cells, config.openEdges ?? [], config.dividerEdges ?? []);
+/**
+ * Resolves config walls for a piece against its logical bin's cell set,
+ * dropping stale entries. Edges between different logical bins are perimeter
+ * edges of each bin, so adjacent bins get full outer walls facing each other.
+ */
+function resolveWalls(pieceCells: GridCell[], binCells: GridCell[], config: BinConfig): EffectiveWalls {
+  return effectiveWalls(pieceCells, binCells, config.openEdges ?? [], config.dividerEdges ?? []);
 }
 
 function totalHeightOf(config: BinConfig): number {
@@ -310,7 +367,7 @@ function clampOpeningRadius(ext: CrossSection, rc: number): number {
  */
 function buildCavityManifold(
   wasm: ManifoldToplevel, plan: CavityPlan, rc: number, filletR: number, totalHeight: number,
-): Manifold | null {
+): { solid: Manifold; cs: CrossSection } | null {
   const CS = wasm.CrossSection;
 
   let cavityRaw = CS.union(plan.cellSquares.map(rectPoly));
@@ -355,12 +412,121 @@ function buildCavityManifold(
   solids.push(
     cavityCS.extrude(totalHeight - floorZ - filletR + CSG_EPSILON).translate([0, 0, floorZ + filletR]),
   );
-  return wasm.Manifold.union(solids);
+  return { solid: wasm.Manifold.union(solids), cs: cavityCS };
 }
 
-/** One bin/piece as a manifold solid, in whole-bin (mm) coordinates. */
+/**
+ * Free-form inner walls, clipped to the bin interior (clipCS = the outer wall
+ * profile, so an end that reaches a wall overlaps into it and fuses cleanly;
+ * at open faces the wall ends flush with the cut plane).
+ *
+ * Where a wall is lower than the rim, a stack of slabs above its top traces a
+ * concave quarter-round ramp into everything taller that it touches: the
+ * "material" region (outer walls + grid dividers = clip − cavity, plus any
+ * taller inner wall's footprint) is dilated by the arc inset at each slab
+ * height and intersected with the wall's own footprint. Slabs shrink with
+ * height, so each overshoots CSG_EPSILON DOWNWARD into the strictly-larger
+ * slab (or main wall) below it, per the containment rule.
+ */
+function buildInnerWallsManifold(
+  wasm: ManifoldToplevel, walls: InnerWall[], clipCS: CrossSection, cavityCS: CrossSection,
+  totalHeight: number,
+): Manifold[] {
+  const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
+  const planned: { footprint: CrossSection; top: number }[] = [];
+  for (const w of walls) {
+    const quad = innerWallQuad(w);
+    if (!quad) continue;
+    const footprint = new wasm.CrossSection([quad]).intersect(clipCS);
+    if (footprint.isEmpty()) continue;
+    planned.push({ footprint, top: innerWallTop(w, floorZ, totalHeight) });
+  }
+
+  const solids: Manifold[] = [];
+  const baseMaterial = clipCS.subtract(cavityCS);
+  planned.forEach((w, i) => {
+    const bottom = floorZ - WALL_EMBED;
+    solids.push(w.footprint.extrude(w.top - bottom).translate([0, 0, bottom]));
+
+    const headroom = totalHeight - w.top;
+    if (headroom < 0.05) return;  // full height (or as good as): nothing to blend into
+    const R = Math.min(TRANSITION_R, headroom);
+    let material = baseMaterial;
+    for (let j = 0; j < planned.length; j++) {
+      if (j !== i && planned[j].top > w.top + 0.01) material = material.add(planned[j].footprint);
+    }
+    if (material.isEmpty()) return;
+
+    const steps = Math.min(16, Math.max(4, Math.ceil(R * 6)));
+    const stepH = R / steps;
+    for (let s = 0; s < steps; s++) {
+      const h = (s + 0.5) * stepH;
+      // Concave quarter circle tangent to the wall top (h=0, d=R) and the
+      // taller face (h=R, d=0): d(h) = R − √(2Rh − h²).
+      const d = R - Math.sqrt(Math.max(0, 2 * R * h - h * h));
+      if (d <= 0.005) continue;
+      const cs = material.offset(d, 'Round', 2, 16).intersect(w.footprint);
+      if (cs.isEmpty()) continue;
+      const zBottom = w.top + s * stepH - CSG_EPSILON;
+      const zTop = Math.min(w.top + (s + 1) * stepH, totalHeight);
+      solids.push(cs.extrude(zTop - zBottom).translate([0, 0, zBottom]));
+    }
+  });
+  return solids;
+}
+
+/**
+ * Sloped-base wedge: the cavity cross-section (clipped back to the outer
+ * profile so it can't poke through open faces) extruded and cut by the slope
+ * plane via trimByPlane. The floor stays at floorZ along the low side and
+ * rises across the LOGICAL BIN's bounding box, so split pieces of one bin
+ * share the same plane and their seams line up. Walls and base stay vertical.
+ */
+function buildSlopedBaseManifold(
+  config: BinConfig, binCells: GridCell[],
+  clipCS: CrossSection, cavityCS: CrossSection, totalHeight: number,
+): Manifold | null {
+  const angle = Math.min(60, Math.max(0, config.baseAngle || 0));
+  if (angle < 0.1) return null;
+  const m = Math.tan((angle * Math.PI) / 180);
+  const [ax, ay] = slopeAscent(config.baseSlopeDir);
+  const b = cellBounds(binCells);
+  const corners: [number, number][] = [[b.minX, b.minY], [b.maxX, b.minY], [b.minX, b.maxY], [b.maxX, b.maxY]];
+  const along = corners.map(([x, y]) => ax * x + ay * y);
+  const minA = Math.min(...along);
+  const span = Math.max(...along) - minA;
+
+  const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
+  const hMax = Math.min(m * span, totalHeight - floorZ);
+  if (hMax < 0.02) return null;
+
+  // Expand the footprint 0.2 mm INTO the surrounding walls before clipping to
+  // the outer profile: a wedge built from cavityCS directly would sit face-to-
+  // face with the cavity walls (same cross-section, different boolean lineage),
+  // and such flush junctions can miss by an ULP and leave zero-thickness
+  // membranes. The overlap is swallowed inside the walls; the clip keeps the
+  // wedge from poking through open faces.
+  const wedgeCS = cavityCS.offset(0.2, 'Miter', 2).intersect(clipCS);
+  if (wedgeCS.isEmpty()) return null;
+  const prism = wedgeCS
+    .extrude(hMax + WALL_EMBED)
+    .translate([0, 0, floorZ - WALL_EMBED]);
+  // Keep the part below the plane z = floorZ + m·(a·p − minA): with
+  // N = (m·ax, m·ay, −1), that is dot(p, N̂) ≥ −c0/|N|, c0 = floorZ − m·minA.
+  const c0 = floorZ - m * minA;
+  const len = Math.hypot(m, 1);
+  return prism.trimByPlane([(m * ax) / len, (m * ay) / len, -1 / len], -c0 / len);
+}
+
+/**
+ * One piece as a manifold solid, in layout (mm) coordinates. `cells` is the
+ * piece's cell set; `binCells` is the full cell set of the logical bin it
+ * belongs to (drives seam detection and the sloped-base plane, which must be
+ * shared across all pieces of one bin).
+ */
 function generatePieceManifold(
-  wasm: ManifoldToplevel, config: BinConfig, cells: GridCell[], walls: EffectiveWalls,
+  wasm: ManifoldToplevel, config: BinConfig, cells: GridCell[], binCells: GridCell[],
+  walls: EffectiveWalls,
 ): Manifold {
   const { Manifold } = wasm;
   const totalHeight = totalHeightOf(config);
@@ -383,7 +549,18 @@ function generatePieceManifold(
 
   const plan = planCavity(cells, walls, config.wallThickness, Math.max(rc, filletR) + 1);
   const cavity = buildCavityManifold(wasm, plan, rc, filletR, totalHeight);
-  if (cavity) bin = bin.subtract(cavity);
+  if (cavity) {
+    bin = bin.subtract(cavity.solid);
+
+    // Interior additions live inside the cavity: free-form inner walls and the
+    // sloped-base wedge. All overlap into existing material (floor embed, wall
+    // band clip), so the unions fuse through real volume.
+    const additions: Manifold[] = buildInnerWallsManifold(
+      wasm, config.innerWalls ?? [], outerCS, cavity.cs, totalHeight);
+    const wedge = buildSlopedBaseManifold(config, binCells, outerCS, cavity.cs, totalHeight);
+    if (wedge) additions.push(wedge);
+    if (additions.length) bin = Manifold.union([bin, ...additions]);
+  }
 
   // Fastener pockets (magnet recess and/or M3 pilot), subtracted as one union.
   const holes: Manifold[] = [
@@ -426,8 +603,9 @@ function concatMeshes(meshes: BinMesh[]): BinMesh {
   return { vertProperties, triVerts };
 }
 
-function pieceName(i: number, n: number): string {
-  return n === 1 ? 'gridfinity-bin.stl' : `gridfinity-bin-piece-${i + 1}-of-${n}.stl`;
+function pieceName(binIdx: number, binCount: number, i: number, n: number): string {
+  const stem = binCount === 1 ? 'gridfinity-bin' : `gridfinity-bin-${binIdx + 1}`;
+  return n === 1 ? `${stem}.stl` : `${stem}-piece-${i + 1}-of-${n}.stl`;
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────────
@@ -444,14 +622,16 @@ function pieceName(i: number, n: number): string {
  * the manifold engine performs every boolean and every inward offset (via
  * Clipper2, which cannot self-intersect).
  *
- * Ignores split lines — the whole bin as one solid. Use generateBinPieces for
- * the split-aware path.
+ * Ignores split lines — every logical bin as one solid, unioned into a single
+ * mesh. Use generateBinPieces for the split-aware path.
  */
 export function generateBinManifold(wasm: ManifoldToplevel, config: BinConfig): BinMesh {
   if (config.cells.length === 0) {
     return manifoldMesh(geom3ToManifold(wasm, primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3));
   }
-  return manifoldMesh(generatePieceManifold(wasm, config, config.cells, resolveWalls(config.cells, config)));
+  const solids = groupBins(config.cells).map((bin) =>
+    generatePieceManifold(wasm, config, bin.cells, bin.cells, resolveWalls(bin.cells, bin.cells, config)));
+  return manifoldMesh(solids.length === 1 ? solids[0] : wasm.Manifold.union(solids));
 }
 
 export interface BinPiece {
@@ -462,40 +642,47 @@ export interface BinPiece {
 }
 
 /**
- * Split-aware build: partitions the cells by config.splitLines and generates
- * each piece as an independent watertight solid. Seam faces are open (walled
- * only where the user placed a divider on the split line) so glued pieces form
- * one continuous bin; every piece keeps its own base pegs.
+ * Split-aware build: partitions each logical bin's cells by config.splitLines
+ * and generates every piece as an independent watertight solid. Seam faces
+ * are open (walled only where the user placed a divider on the split line) so
+ * glued pieces form one continuous bin; edges between DIFFERENT logical bins
+ * are ordinary perimeter walls. Every piece keeps its own base pegs.
  *
- * The preview shows the pieces in whole-bin coordinates, exploded by
- * EXPLODE_GAP per split-grid position so the seams are visible. It is a plain
- * concatenation of the independently-manifold piece meshes.
+ * The preview shows the pieces in layout coordinates, exploded by EXPLODE_GAP
+ * per split-grid position so seams are visible (adjacent logical bins stay in
+ * place — they are already separate solids). It is a plain concatenation of
+ * the independently-manifold piece meshes.
  */
 export function generateBinPieces(
   wasm: ManifoldToplevel, config: BinConfig,
 ): { pieces: BinPiece[]; preview: BinMesh } {
   if (config.cells.length === 0) {
     const mesh = generateBinManifold(wasm, config);
-    return { pieces: [{ name: pieceName(0, 1), col: 0, row: 0, mesh }], preview: mesh };
+    return { pieces: [{ name: pieceName(0, 1, 0, 1), col: 0, row: 0, mesh }], preview: mesh };
   }
 
-  const parts = partitionCells(config.cells, config.splitLines ?? []);
+  const bins = groupBins(config.cells);
   const pieces: BinPiece[] = [];
   const previewMeshes: BinMesh[] = [];
-  parts.forEach((part, i) => {
-    const solid = generatePieceManifold(wasm, config, part.cells, resolveWalls(part.cells, config));
-    const mesh = manifoldMesh(solid);
-    const minX = Math.min(...part.cells.map((c) => c.x));
-    const minY = Math.min(...part.cells.map((c) => c.y));
-    pieces.push({
-      name: pieceName(i, parts.length),
-      col: part.col,
-      row: part.row,
-      mesh: translateMesh(mesh, -minX * GRID_PITCH, -minY * GRID_PITCH),
+  const anySplit = bins.some((bin) => partitionCells(bin.cells, config.splitLines ?? []).length > 1);
+  bins.forEach((bin, bi) => {
+    const parts = partitionCells(bin.cells, config.splitLines ?? []);
+    parts.forEach((part, i) => {
+      const solid = generatePieceManifold(
+        wasm, config, part.cells, bin.cells, resolveWalls(part.cells, bin.cells, config));
+      const mesh = manifoldMesh(solid);
+      const minX = Math.min(...part.cells.map((c) => c.x));
+      const minY = Math.min(...part.cells.map((c) => c.y));
+      pieces.push({
+        name: pieceName(bi, bins.length, i, parts.length),
+        col: part.col,
+        row: part.row,
+        mesh: translateMesh(mesh, -minX * GRID_PITCH, -minY * GRID_PITCH),
+      });
+      previewMeshes.push(anySplit
+        ? translateMesh(mesh, part.col * EXPLODE_GAP, part.row * EXPLODE_GAP)
+        : mesh);
     });
-    previewMeshes.push(parts.length > 1
-      ? translateMesh(mesh, part.col * EXPLODE_GAP, part.row * EXPLODE_GAP)
-      : mesh);
   });
 
   return { pieces, preview: concatMeshes(previewMeshes) };
@@ -518,7 +705,9 @@ function geom2Area(g: Geom2): number {
   }
 }
 
-function buildCavityJscad(plan: CavityPlan, rc: number, filletR: number, totalHeight: number): Geom3 | null {
+function buildCavityJscad(
+  plan: CavityPlan, rc: number, filletR: number, totalHeight: number,
+): { geom: Geom3; cs: Geom2 } | null {
   let cavityRaw = union(plan.cellSquares.map(rectGeom2));
   if (plan.solidStrips.length) {
     cavityRaw = booleans.subtract(cavityRaw, union(plan.solidStrips.map(rectGeom2))) as Geom2;
@@ -562,28 +751,107 @@ function buildCavityJscad(plan: CavityPlan, rc: number, filletR: number, totalHe
       { height: totalHeight - floorZ - filletR + CSG_EPSILON },
       cavityCS,
     )) as Geom3);
-  return union(solids);
+  return { geom: union(solids), cs: cavityCS };
 }
 
-function generatePieceJscad(config: BinConfig, cells: GridCell[], walls: EffectiveWalls): Geom3 {
+/** Fallback inner walls: clipped prisms, no height-transition ramps (degraded mode). */
+function buildInnerWallsJscad(walls: InnerWall[], outerProfile: Geom2, totalHeight: number): Geom3[] {
+  const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
+  const solids: Geom3[] = [];
+  for (const w of walls) {
+    const quad = innerWallQuad(w);
+    if (!quad) continue;
+    let fp = primitives.polygon({ points: quad }) as Geom2;
+    try {
+      const clipped = booleans.intersect(fp, outerProfile) as Geom2;
+      if (geom2Area(clipped) < 1e-6) continue;
+      fp = clipped;
+    } catch { /* unclipped quad still renders; may poke past walls in degraded mode */ }
+    const top = innerWallTop(w, floorZ, totalHeight);
+    const bottom = floorZ - WALL_EMBED;
+    try {
+      solids.push(transforms.translate([0, 0, bottom],
+        extrusions.extrudeLinear({ height: top - bottom }, fp)) as Geom3);
+    } catch { continue; }
+  }
+  return solids;
+}
+
+/** Fallback sloped base: a staircase of slabs under the slope plane (degraded mode). */
+function buildSlopedBaseJscad(
+  config: BinConfig, binCells: GridCell[], cavityCS: Geom2, totalHeight: number,
+): Geom3[] {
+  const angle = Math.min(60, Math.max(0, config.baseAngle || 0));
+  if (angle < 0.1) return [];
+  const m = Math.tan((angle * Math.PI) / 180);
+  const [ax, ay] = slopeAscent(config.baseSlopeDir);
+  const b = cellBounds(binCells);
+  const corners: [number, number][] = [[b.minX, b.minY], [b.maxX, b.minY], [b.minX, b.maxY], [b.maxX, b.maxY]];
+  const along = corners.map(([x, y]) => ax * x + ay * y);
+  const minA = Math.min(...along);
+  const span = Math.max(...along) - minA;
+
+  const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
+  const hMax = Math.min(m * span, totalHeight - floorZ);
+  if (hMax < 0.02) return [];
+
+  // Ascent is axis-aligned, so each "at least this tall" region is a plain rect.
+  const halfRect = (s: number): Geom2 => {
+    const pad = 1;
+    if (ax === 1)  return rectGeom2({ x: b.minX + s, y: b.minY - pad, w: b.maxX - (b.minX + s) + pad, h: b.maxY - b.minY + 2 * pad });
+    if (ax === -1) return rectGeom2({ x: b.minX - pad, y: b.minY - pad, w: (b.maxX - s) - b.minX + pad, h: b.maxY - b.minY + 2 * pad });
+    if (ay === 1)  return rectGeom2({ x: b.minX - pad, y: b.minY + s, w: b.maxX - b.minX + 2 * pad, h: b.maxY - (b.minY + s) + pad });
+    return rectGeom2({ x: b.minX - pad, y: b.minY - pad, w: b.maxX - b.minX + 2 * pad, h: (b.maxY - s) - b.minY + pad });
+  };
+
+  const solids: Geom3[] = [];
+  const steps = 12;
+  const dh = hMax / steps;
+  for (let k = 0; k < steps; k++) {
+    const s = ((k + 1) * dh) / m;
+    if (s >= span) break;
+    try {
+      const prof = booleans.intersect(cavityCS, halfRect(s)) as Geom2;
+      if (geom2Area(prof) < 1e-6) continue;
+      const bottom = k === 0 ? floorZ - WALL_EMBED : floorZ + k * dh - CSG_EPSILON;
+      solids.push(transforms.translate([0, 0, bottom],
+        extrusions.extrudeLinear({ height: floorZ + (k + 1) * dh - bottom }, prof)) as Geom3);
+    } catch { continue; }
+  }
+  return solids;
+}
+
+function generatePieceJscad(
+  config: BinConfig, cells: GridCell[], binCells: GridCell[], walls: EffectiveWalls,
+): Geom3 {
   const totalHeight = totalHeightOf(config);
   const filletR = clampFilletR(config.innerFilletRadius, totalHeight);
   const rc = Math.max(0, config.cavityCornerRadius || 0);
 
-  const shell = buildShell(cells, totalHeight, buildOuterProfile(cells));
+  const outerProfile = buildOuterProfile(cells);
+  const shell = buildShell(cells, totalHeight, outerProfile);
   const plan = planCavity(cells, walls, config.wallThickness, Math.max(rc, filletR) + 1);
   const cavity = buildCavityJscad(plan, rc, filletR, totalHeight);
 
-  let bin: Geom3 = cavity ? booleans.subtract(shell, cavity) as Geom3 : shell;
+  let bin: Geom3 = cavity ? booleans.subtract(shell, cavity.geom) as Geom3 : shell;
+  if (cavity) {
+    const additions = [
+      ...buildInnerWallsJscad(config.innerWalls ?? [], outerProfile, totalHeight),
+      ...buildSlopedBaseJscad(config, binCells, cavity.cs, totalHeight),
+    ];
+    if (additions.length) bin = booleans.union(bin, ...additions) as Geom3;
+  }
   if (config.magnetHoles) bin = booleans.subtract(bin, ...buildFastenerHoles(cells, MAGNET_RADIUS, MAGNET_DEPTH, 32)) as Geom3;
   if (config.screwHoles)  bin = booleans.subtract(bin, ...buildFastenerHoles(cells, SCREW_RADIUS,  SCREW_DEPTH,  16)) as Geom3;
   return bin;
 }
 
-/** JSCAD-only fallback for the whole bin (ignores split lines). */
+/** JSCAD-only fallback for the whole layout (ignores split lines). */
 export function generateBin(config: BinConfig): Geom3 {
   if (config.cells.length === 0) return primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3;
-  return generatePieceJscad(config, config.cells, resolveWalls(config.cells, config));
+  const solids = groupBins(config.cells).map((bin) =>
+    generatePieceJscad(config, bin.cells, bin.cells, resolveWalls(bin.cells, bin.cells, config)));
+  return union(solids);
 }
 
 export interface BinPieceGeom {
@@ -596,19 +864,23 @@ export interface BinPieceGeom {
 export function generateBinPiecesJscad(config: BinConfig): BinPieceGeom[] {
   if (config.cells.length === 0) {
     const geom = generateBin(config);
-    return [{ name: pieceName(0, 1), exportGeom: geom, previewGeom: geom }];
+    return [{ name: pieceName(0, 1, 0, 1), exportGeom: geom, previewGeom: geom }];
   }
-  const parts = partitionCells(config.cells, config.splitLines ?? []);
-  return parts.map((part, i) => {
-    const geom = generatePieceJscad(config, part.cells, resolveWalls(part.cells, config));
-    const minX = Math.min(...part.cells.map((c) => c.x));
-    const minY = Math.min(...part.cells.map((c) => c.y));
-    return {
-      name: pieceName(i, parts.length),
-      exportGeom: transforms.translate([-minX * GRID_PITCH, -minY * GRID_PITCH, 0], geom) as Geom3,
-      previewGeom: parts.length > 1
-        ? transforms.translate([part.col * EXPLODE_GAP, part.row * EXPLODE_GAP, 0], geom) as Geom3
-        : geom,
-    };
+  const bins = groupBins(config.cells);
+  const anySplit = bins.some((bin) => partitionCells(bin.cells, config.splitLines ?? []).length > 1);
+  return bins.flatMap((bin, bi) => {
+    const parts = partitionCells(bin.cells, config.splitLines ?? []);
+    return parts.map((part, i) => {
+      const geom = generatePieceJscad(config, part.cells, bin.cells, resolveWalls(part.cells, bin.cells, config));
+      const minX = Math.min(...part.cells.map((c) => c.x));
+      const minY = Math.min(...part.cells.map((c) => c.y));
+      return {
+        name: pieceName(bi, bins.length, i, parts.length),
+        exportGeom: transforms.translate([-minX * GRID_PITCH, -minY * GRID_PITCH, 0], geom) as Geom3,
+        previewGeom: anySplit
+          ? transforms.translate([part.col * EXPLODE_GAP, part.row * EXPLODE_GAP, 0], geom) as Geom3
+          : geom,
+      };
+    });
   });
 }

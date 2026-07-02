@@ -13,7 +13,7 @@
 
 .editor {
   width: 100%;
-  aspect-ratio: 1;
+
   touch-action: none;
 }
 
@@ -84,12 +84,97 @@
   stroke-width: 3;
 }
 
+.innerWall {
+  stroke: #14b8a6;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.draftWall {
+  stroke: #2dd4bf;
+  stroke-width: 3;
+  stroke-dasharray: 5 4;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.wallList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.listTitle {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #aaa;
+}
+
+.wallRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: #232328;
+  font-size: 0.75rem;
+  color: #aaa;
+}
+
+.wallLen {
+  flex: 1;
+  color: #ccc;
+}
+
+.wallField {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.wallInput {
+  width: 46px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  border: 1px solid #3a3a42;
+  background: #2a2a30;
+  color: #ddd;
+  font-size: 0.75rem;
+}
+
+.wallInput:disabled {
+  opacity: 0.4;
+}
+
+.wallFull {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.wallDelete {
+  all: unset;
+  padding: 0 6px;
+  border-radius: 4px;
+  color: #f87171;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.wallDelete:hover {
+  background: #3a2a2a;
+}
+
 .legend {
   display: flex;
   gap: 14px;
   font-size: 0.75rem;
   color: #888;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .legend span {
@@ -115,6 +200,10 @@
 
 .swatchDivider {
   background: #2563eb;
+}
+
+.swatchInner {
+  background: #14b8a6;
 }
 
 .resetButton {

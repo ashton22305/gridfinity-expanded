@@ -41,11 +41,15 @@ src/
       AppLayout.tsx       two-column layout (sidebar + viewer)
     sidebar/
       Sidebar.tsx         tabbed left panel
+      binColors.ts        bin-id → color palette for the editors
       tabs/
-        ShapeTab.tsx      click/drag grid cell editor (6×6)
-        WallsTab.tsx      SVG edge editor: remove outer walls, add dividers
+        ShapeTab.tsx      click/drag cell editor; resizable grid (up to 40×40),
+                          multi-bin painting palette
+        WallsTab.tsx      SVG edge editor (open walls, grid dividers) + drag-to-draw
+                          free-form inner walls with per-wall width/height list
         SplitTab.tsx      SVG split-line editor (auto-from-bed / manual) + piece fit
-        DimensionsTab.tsx height, wall thickness, cavity corner radius, inner fillet
+        DimensionsTab.tsx height, wall thickness, cavity corner radius, inner fillet,
+                          base slope (angle + low side)
         PrinterTab.tsx    printer presets + bed-fit warning
     viewer/
       BabylonViewer.tsx   Babylon.js canvas; reloads mesh on stlBuffer change
@@ -78,9 +82,26 @@ Geometry semantics worth knowing:
   patches), shared by both build paths. Rounding and fillet insets operate on
   the cavity *extended through its open faces*, then intersect back — otherwise
   they retreat at open/seam faces and grow ribs on glue surfaces.
+- `innerWalls` are free-form (non-grid-aligned) segments in mm with per-wall
+  width and height, clipped to the outer profile so an end reaching a wall
+  overlaps into it. A lower wall gets a concave quarter-round ramp
+  (`TRANSITION_R`, clamped to headroom) into anything taller it touches, built
+  as slabs of dilate(taller-material) ∩ wall-footprint that shrink with height
+  and overshoot CSG_EPSILON *downward* (containment rule). The JSCAD fallback
+  skips the ramps.
+- `baseAngle`/`baseSlopeDir` tilt the cavity floor: a wedge = cavityCS expanded
+  0.2 mm into the walls (flush-face membrane guard), clipped to the outer
+  profile, extruded and cut by `trimByPlane`. The slope plane spans the LOGICAL
+  BIN's bbox so split pieces line up. Fallback approximates with slab stairs.
+- `GridCell.bin` (optional, default 0) assigns cells to distinct logical bins:
+  each is generated independently with full perimeter walls (inter-bin edges
+  are perimeter for both sides), exported as its own STL, spec 0.5 mm apart.
 - Split pieces are independent bins; seam edges are open unless a divider sits
   exactly on the split line. Stale edge/line config entries are ignored by the
   geometry layer, never migrated.
+- `manifoldMesh()` welds output vertices and repairs float32-degenerate sliver
+  triangles by splitting the neighbor across the sliver's long edge — keep it
+  in the export path.
 
 ## Adding features
 
@@ -105,5 +126,8 @@ Push to `main`. GitHub Actions (`.github/workflows/deploy.yml`) builds and deplo
 
 - Bottom chamfer on bin edges not yet implemented (printable but not spec-perfect).
 - Babylon.js main bundle is ~6 MB; switch to tree-shaken imports from `@babylonjs/core/...` to reduce.
-- Grid editor is fixed at 6×6 cells; larger grids need a size control.
 - STL only; 3MF export not yet wired (`@jscad/3mf-serializer` is installed).
+- Inner-wall ramps blend into walls/dividers/taller inner walls but not into the
+  sloped-base wedge; inner walls have no floor fillet along their own base.
+- JSCAD fallback (WASM-failure mode only) skips inner-wall ramps and stair-steps
+  the sloped base.

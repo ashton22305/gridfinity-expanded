@@ -93,6 +93,45 @@ export function DimensionsTab({ config, onChange }: Props) {
         </div>
         <p className={styles.hint}>Rounds the inside floor-to-wall edge for easier cleaning</p>
       </label>
+
+      <label className={styles.field}>
+        <span className={styles.label}>Base slope</span>
+        <div className={styles.inputRow}>
+          <input
+            type="range"
+            min={0}
+            max={30}
+            step={1}
+            value={config.baseAngle}
+            onChange={(e) => onChange({ ...config, baseAngle: Number(e.target.value) })}
+            className={styles.slider}
+          />
+          <span className={styles.value}>
+            {config.baseAngle.toFixed(0)}
+            <span className={styles.mm}>°</span>
+          </span>
+        </div>
+        {config.baseAngle > 0 && (
+          <div className={styles.inputRow}>
+            <select
+              className={styles.select}
+              value={config.baseSlopeDir}
+              onChange={(e) =>
+                onChange({ ...config, baseSlopeDir: e.target.value as BinConfig['baseSlopeDir'] })}
+              aria-label="Low side of the sloped base"
+            >
+              <option value="-y">Low at top edge (as drawn in Shape)</option>
+              <option value="+y">Low at bottom edge</option>
+              <option value="-x">Low at left edge</option>
+              <option value="+x">Low at right edge</option>
+            </select>
+          </div>
+        )}
+        <p className={styles.hint}>
+          Tilts the cavity floor so contents slide to one side. Walls and the
+          Gridfinity base stay standard.
+        </p>
+      </label>
     </div>
   );
 }

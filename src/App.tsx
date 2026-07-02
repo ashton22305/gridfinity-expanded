@@ -23,8 +23,11 @@ const DEFAULT_CONFIG: BinConfig = {
   screwHoles: false,
   openEdges: [],
   dividerEdges: [],
+  innerWalls: [],
   splitMode: 'auto',
   splitLines: [],
+  baseAngle: 0,
+  baseSlopeDir: '+y',
 };
 
 export default function App() {
@@ -32,6 +35,8 @@ export default function App() {
   const [printerProfile, setPrinterProfile] = useState<PrinterProfile>(
     PRINTER_PROFILES[5] // Prusa MK4 / MK3S+
   );
+  // Editor canvas size in cells — purely a UI concern, not part of the geometry config.
+  const [gridSize, setGridSize] = useState({ cols: 16, rows: 12 });
 
   // Auto split mode derives the effective split lines from the printer bed.
   // Equality-guarded so writing the same lines back doesn't loop the effect.
@@ -59,6 +64,9 @@ export default function App() {
           onConfigChange={setConfig}
           printerProfile={printerProfile}
           onPrinterChange={setPrinterProfile}
+          gridCols={gridSize.cols}
+          gridRows={gridSize.rows}
+          onGridSizeChange={(cols, rows) => setGridSize({ cols, rows })}
         />
       }
       viewer={

@@ -1,16 +1,17 @@
 import type { BinConfig, PrinterProfile, SplitLine } from '../../../lib/types';
 import { checkPieceFit } from '../../../lib/printers';
 import { sortSplitLines } from '../../../lib/split';
+import { binColor } from '../binColors';
 import styles from './SplitTab.module.css';
 
 interface Props {
   config: BinConfig;
   onChange: (next: BinConfig) => void;
   printerProfile: PrinterProfile;
+  gridCols: number;
+  gridRows: number;
 }
 
-const GRID_COLS = 6;
-const GRID_ROWS = 6;
 const CELL = 40;   // svg units per cell
 const PAD = 8;
 
@@ -24,7 +25,7 @@ function toggleLine(lines: SplitLine[], l: SplitLine): SplitLine[] {
   return sortSplitLines(without.length === lines.length ? [...lines, l] : without);
 }
 
-export function SplitTab({ config, onChange, printerProfile }: Props) {
+export function SplitTab({ config, onChange, printerProfile, gridCols, gridRows }: Props) {
   const { cells, splitMode, splitLines } = config;
 
   if (cells.length === 0) {
@@ -81,10 +82,11 @@ export function SplitTab({ config, onChange, printerProfile }: Props) {
 
       <svg
         className={styles.editor}
-        viewBox={`0 0 ${GRID_COLS * CELL + PAD * 2} ${GRID_ROWS * CELL + PAD * 2}`}
+        viewBox={`0 0 ${gridCols * CELL + PAD * 2} ${gridRows * CELL + PAD * 2}`}
+        style={{ aspectRatio: `${gridCols * CELL + PAD * 2} / ${gridRows * CELL + PAD * 2}` }}
       >
-        {Array.from({ length: GRID_ROWS }, (_, row) =>
-          Array.from({ length: GRID_COLS }, (_, col) => (
+        {Array.from({ length: gridRows }, (_, row) =>
+          Array.from({ length: gridCols }, (_, col) => (
             <rect
               key={`bg${col},${row}`}
               className={styles.bgRect}
@@ -96,12 +98,13 @@ export function SplitTab({ config, onChange, printerProfile }: Props) {
             />
           ))
         )}
-        {cells.map(({ x, y }) => (
+        {cells.map((c) => (
           <rect
-            key={`c${x},${y}`}
+            key={`c${c.x},${c.y}`}
             className={styles.cellRect}
-            x={PAD + x * CELL}
-            y={PAD + y * CELL}
+            style={{ fill: binColor(c.bin), fillOpacity: 0.22 }}
+            x={PAD + c.x * CELL}
+            y={PAD + c.y * CELL}
             width={CELL}
             height={CELL}
           />

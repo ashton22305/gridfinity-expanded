@@ -1,6 +1,6 @@
 import type { GridCell, PrinterProfile, BedFitResult, SplitLine } from './types';
 import { GRID_PITCH } from './geometry/gridfinity';
-import { partitionCells, sortSplitLines } from './split';
+import { partitionCells, sortSplitLines, groupBins } from './split';
 
 export const PRINTER_PROFILES: PrinterProfile[] = [
   { name: 'Bambu Lab A1 Mini', bedWidth: 180, bedDepth: 180 },
@@ -90,19 +90,22 @@ export interface PieceFitResult {
   worst: BedFitResult;
 }
 
-/** Bed fit across all pieces produced by the given split lines. */
+/** Bed fit across all pieces (every logical bin × its split chunks). */
 export function checkPieceFit(
   cells: GridCell[],
   splitLines: SplitLine[],
   printer: PrinterProfile,
 ): PieceFitResult {
-  const pieces = partitionCells(cells, splitLines);
   let worst: BedFitResult = { fits: true, binWidth: 0, binDepth: 0 };
   let allFit = true;
-  for (const piece of pieces) {
-    const fit = checkBedFit(piece.cells, printer);
-    if (!fit.fits) allFit = false;
-    if (fit.binWidth * fit.binDepth >= worst.binWidth * worst.binDepth) worst = fit;
+  let count = 0;
+  for (const bin of groupBins(cells)) {
+    for (const piece of partitionCells(bin.cells, splitLines)) {
+      count++;
+      const fit = checkBedFit(piece.cells, printer);
+      if (!fit.fits) allFit = false;
+      if (fit.binWidth * fit.binDepth >= worst.binWidth * worst.binDepth) worst = fit;
+    }
   }
-  return { pieces: pieces.length, allFit, worst };
+  return { pieces: count, allFit, worst };
 }

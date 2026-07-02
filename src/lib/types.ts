@@ -1,6 +1,8 @@
 export interface GridCell {
   x: number;
   y: number;
+  bin?: number;  // logical bin id (default 0): adjacent cells with different ids
+                 // become physically separate bins with their own outer walls
 }
 
 export type EdgeOrientation = 'h' | 'v';
@@ -24,6 +26,20 @@ export interface SplitLine {
   index: number;
 }
 
+/**
+ * Free-form inner wall: a straight segment in whole-bin mm coordinates, not
+ * grid-aligned. Clipped to the bin interior; where it is lower than the outer
+ * walls, a concave ramp blends its top into any taller structure it touches.
+ */
+export interface InnerWall {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  width: number;         // mm
+  height: number | null; // mm above the cavity floor; null = full height
+}
+
 export interface BinConfig {
   cells: GridCell[];
   heightUnits: number;
@@ -34,8 +50,11 @@ export interface BinConfig {
   screwHoles: boolean;          // M3 pilot holes inside each magnet recess
   openEdges: GridEdge[];        // perimeter edges whose wall is REMOVED (exceptions to the default)
   dividerEdges: GridEdge[];     // internal edges with a divider wall ADDED (exceptions to the default)
+  innerWalls: InnerWall[];      // free-form (non-grid-aligned) walls inside the cavity
   splitMode: 'auto' | 'manual'; // auto = UI derives splitLines from the printer bed
   splitLines: SplitLine[];      // always the effective value the geometry consumes
+  baseAngle: number;            // cavity floor slope in degrees (0 = flat); walls stay vertical
+  baseSlopeDir: '+x' | '-x' | '+y' | '-y';  // side the floor is LOWEST at (shape-editor axes)
 }
 
 export interface PrinterProfile {
