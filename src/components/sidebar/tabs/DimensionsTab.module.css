@@ -76,6 +76,20 @@
   border-color: #2563eb;
 }
 
+.binDot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  vertical-align: baseline;
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #888;
+}
+
 .note {
   font-size: 0.78rem;
   color: #666;

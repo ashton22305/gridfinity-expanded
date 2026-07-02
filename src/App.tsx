@@ -26,8 +26,7 @@ const DEFAULT_CONFIG: BinConfig = {
   innerWalls: [],
   splitMode: 'auto',
   splitLines: [],
-  baseAngle: 0,
-  baseSlopeDir: '+y',
+  baseSlopes: [],
 };
 
 export default function App() {

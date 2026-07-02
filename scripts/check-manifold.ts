@@ -175,7 +175,7 @@ const base: Omit<BinConfig, 'cells'> = {
   heightUnits: 3, wallThickness: 1.2, cavityCornerRadius: 3.75, innerFilletRadius: 0.5,
   magnetHoles: true, screwHoles: false,
   openEdges: [], dividerEdges: [], innerWalls: [], splitMode: 'manual', splitLines: [],
-  baseAngle: 0, baseSlopeDir: '+y',
+  baseSlopes: [],
 };
 
 const cases: { name: string; config: BinConfig }[] = [
@@ -223,16 +223,24 @@ const cases: { name: string; config: BinConfig }[] = [
   { name: 'wall rc20 fillet6',   config: { ...base, cells: rect(2, 2), cavityCornerRadius: 20, innerFilletRadius: 6, innerWalls: [{ x1: 0, y1: 30, x2: 84, y2: 60, width: 1.6, height: 8 }] } },
   { name: 'wall in wall band',   config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 0, y1: 0.5, x2: 84, y2: 0.5, width: 1, height: null }] } },
   // Sloped base
-  { name: 'slope 15 +y',         config: { ...base, cells: rect(2, 2), baseAngle: 15, baseSlopeDir: '+y' } },
-  { name: 'slope 30 -x fillet3', config: { ...base, cells: rect(1, 1), baseAngle: 30, baseSlopeDir: '-x', innerFilletRadius: 3 } },
-  { name: 'L slope 20 rc6',      config: { ...base, cells: L, baseAngle: 20, baseSlopeDir: '+x', cavityCornerRadius: 6 } },
-  { name: 'slope 45 h1 clamp',   config: { ...base, cells: rect(2, 1), heightUnits: 1, baseAngle: 45, baseSlopeDir: '-y' } },
-  { name: 'slope + low wall',    config: { ...base, cells: rect(2, 2), baseAngle: 12, baseSlopeDir: '+x', innerWalls: [{ x1: 0, y1: 42, x2: 84, y2: 42, width: 1.6, height: 9 }] } },
+  { name: 'slope 15 +y',         config: { ...base, cells: rect(2, 2), baseSlopes: [{ bin: 0, angle: 15, dir: '+y' }] } },
+  { name: 'slope 30 -x fillet3', config: { ...base, cells: rect(1, 1), baseSlopes: [{ bin: 0, angle: 30, dir: '-x' }], innerFilletRadius: 3 } },
+  { name: 'L slope 20 rc6',      config: { ...base, cells: L, baseSlopes: [{ bin: 0, angle: 20, dir: '+x' }], cavityCornerRadius: 6 } },
+  { name: 'slope 45 h1 clamp',   config: { ...base, cells: rect(2, 1), heightUnits: 1, baseSlopes: [{ bin: 0, angle: 45, dir: '-y' }] } },
+  { name: 'slope + low wall',    config: { ...base, cells: rect(2, 2), baseSlopes: [{ bin: 0, angle: 12, dir: '+x' }], innerWalls: [{ x1: 0, y1: 42, x2: 84, y2: 42, width: 1.6, height: 9 }] } },
   // Multiple distinct bins
   { name: '2 bins adjacent',     config: { ...base, cells: [
       { x: 0, y: 0, bin: 0 }, { x: 0, y: 1, bin: 0 },
       { x: 1, y: 0, bin: 1 }, { x: 1, y: 1, bin: 1 },
     ] } },
+  { name: '2 bins 2 slopes',     config: { ...base, cells: [
+      { x: 0, y: 0, bin: 0 }, { x: 0, y: 1, bin: 0 },
+      { x: 1, y: 0, bin: 1 }, { x: 1, y: 1, bin: 1 },
+    ], baseSlopes: [
+      { bin: 0, angle: 18, dir: '+y' },
+      { bin: 1, angle: 25, dir: '-x' },
+    ] } },
+  { name: '1x1 h20 tall',        config: { ...base, cells: rect(1, 1), heightUnits: 20, baseSlopes: [{ bin: 0, angle: 30, dir: '+x' }] } },
 ];
 
 const U: GridCell[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 0, y: 1 }, { x: 2, y: 1 }];
@@ -244,7 +252,7 @@ const splitCases: { name: string; config: BinConfig }[] = [
   { name: 'L split (empty box)', config: { ...base, cells: L, splitLines: [{ axis: 'x', index: 1 }, { axis: 'y', index: 1 }] } },
   { name: 'U split (disjoint)',  config: { ...base, cells: U, splitLines: [{ axis: 'y', index: 1 }] } },
   { name: 'wall across seam',    config: { ...base, cells: rect(4, 1), splitLines: [{ axis: 'x', index: 2 }], innerWalls: [{ x1: 10, y1: 21, x2: 158, y2: 21, width: 1.6, height: 8 }] } },
-  { name: 'slope across seam',   config: { ...base, cells: rect(6, 1), baseAngle: 8, baseSlopeDir: '-x', splitLines: [{ axis: 'x', index: 3 }] } },
+  { name: 'slope across seam',   config: { ...base, cells: rect(6, 1), baseSlopes: [{ bin: 0, angle: 8, dir: '-x' }], splitLines: [{ axis: 'x', index: 3 }] } },
   { name: '2 bins + split',      config: { ...base, cells: [
       { x: 0, y: 0, bin: 0 }, { x: 1, y: 0, bin: 0 }, { x: 2, y: 0, bin: 1 }, { x: 3, y: 0, bin: 1 },
     ], splitLines: [{ axis: 'x', index: 1 }] } },

@@ -22,6 +22,35 @@ const mmToSvg = (mm: number) => PAD + (mm / GRID_PITCH) * CELL;
 const svgToMm = (u: number) => ((u - PAD) / CELL) * GRID_PITCH;
 const snapMm = (mm: number) => Math.round(mm * 2) / 2;
 
+// Drawing aids: endpoints magnetize to grid lines within GRID_SNAP_MM, and the
+// segment locks to 45° increments when the drag is within ANGLE_SNAP_DEG of one.
+const GRID_SNAP_MM = 3;
+const ANGLE_SNAP_RAD = (7 * Math.PI) / 180;
+
+function gridSnap(mm: number): number {
+  const line = Math.round(mm / GRID_PITCH) * GRID_PITCH;
+  return Math.abs(mm - line) <= GRID_SNAP_MM ? line : snapMm(mm);
+}
+
+/** Endpoint for a draft from (x1,y1) toward p, with grid + 45° snapping. */
+function snapEnd(x1: number, y1: number, p: { x: number; y: number }): { x2: number; y2: number } {
+  let x = gridSnap(p.x), y = gridSnap(p.y);
+  const dx = x - x1, dy = y - y1;
+  if (Math.hypot(dx, dy) < 2) return { x2: x, y2: y };
+  const step = Math.PI / 4;
+  const angle = Math.atan2(dy, dx);
+  const snapped = Math.round(angle / step) * step;
+  if (Math.abs(angle - snapped) <= ANGLE_SNAP_RAD) {
+    const ux = Math.cos(snapped), uy = Math.sin(snapped);
+    const t = dx * ux + dy * uy;
+    x = snapMm(x1 + t * ux);
+    y = snapMm(y1 + t * uy);
+    if (Math.abs(ux) < 1e-6) x = x1;  // exact vertical
+    if (Math.abs(uy) < 1e-6) y = y1;  // exact horizontal
+  }
+  return { x2: x, y2: y };
+}
+
 function edgeEndpoints(e: GridEdge): { x1: number; y1: number; x2: number; y2: number } {
   const x = PAD + e.x * CELL;
   const y = PAD + e.y * CELL;
@@ -73,21 +102,21 @@ export function WallsTab({ config, onChange, gridCols, gridRows }: Props) {
   function svgPoint(e: React.PointerEvent): { x: number; y: number } {
     const rect = svgRef.current!.getBoundingClientRect();
     return {
-      x: snapMm(svgToMm(((e.clientX - rect.left) / rect.width) * viewW)),
-      y: snapMm(svgToMm(((e.clientY - rect.top) / rect.height) * viewH)),
+      x: svgToMm(((e.clientX - rect.left) / rect.width) * viewW),
+      y: svgToMm(((e.clientY - rect.top) / rect.height) * viewH),
     };
   }
 
   function startDraw(e: React.PointerEvent) {
     const p = svgPoint(e);
-    setDraft({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+    const x = gridSnap(p.x), y = gridSnap(p.y);
+    setDraft({ x1: x, y1: y, x2: x, y2: y });
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
   }
 
   function moveDraw(e: React.PointerEvent) {
     if (!draft) return;
-    const p = svgPoint(e);
-    setDraft({ ...draft, x2: p.x, y2: p.y });
+    setDraft({ ...draft, ...snapEnd(draft.x1, draft.y1, svgPoint(e)) });
   }
 
   function endDraw() {
@@ -117,7 +146,8 @@ export function WallsTab({ config, onChange, gridCols, gridRows }: Props) {
     <div className={styles.tab}>
       <p className={styles.hint}>
         Click outer edges to remove/restore walls, inner edges to add grid
-        dividers. Drag inside a bin to draw a custom wall at any angle.
+        dividers. Drag inside a bin to draw a custom wall at any angle —
+        endpoints snap to grid lines, and the wall snaps near 45° increments.
       </p>
       <svg
         ref={svgRef}

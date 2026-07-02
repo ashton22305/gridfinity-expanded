@@ -1,6 +1,6 @@
 import { primitives, booleans, expansions, extrusions, transforms, hulls, measurements } from '@jscad/modeling';
 import type { ManifoldToplevel, Manifold, CrossSection } from 'manifold-3d';
-import type { BinConfig, GridCell, InnerWall } from '../types';
+import type { BinConfig, BinSlope, GridCell, InnerWall, SlopeDir } from '../types';
 import { effectiveWalls, edgeInsideCell, cellSet, type EffectiveWalls } from '../edges';
 import { partitionCells, groupBins } from '../split';
 import { geom3ToManifold, geom2ToCrossSection, manifoldMesh, type BinMesh } from './manifold';
@@ -91,8 +91,13 @@ function innerWallTop(w: InnerWall, floorZ: number, totalHeight: number): number
   return floorZ + Math.max(0.5, w.height);
 }
 
+/** Per-bin slope entry lookup (first match wins; absent = flat). */
+function slopeForBin(config: BinConfig, binId: number): BinSlope | undefined {
+  return (config.baseSlopes ?? []).find((s) => s.bin === binId);
+}
+
 /** Unit 2D ascent direction of the sloped base (floor rises AWAY from the low side). */
-function slopeAscent(dir: BinConfig['baseSlopeDir']): [number, number] {
+function slopeAscent(dir: SlopeDir): [number, number] {
   switch (dir) {
     case '+x': return [-1, 0];  // low at +x → rises toward -x
     case '-x': return [1, 0];
@@ -483,13 +488,13 @@ function buildInnerWallsManifold(
  * share the same plane and their seams line up. Walls and base stay vertical.
  */
 function buildSlopedBaseManifold(
-  config: BinConfig, binCells: GridCell[],
+  slope: BinSlope | undefined, binCells: GridCell[],
   clipCS: CrossSection, cavityCS: CrossSection, totalHeight: number,
 ): Manifold | null {
-  const angle = Math.min(60, Math.max(0, config.baseAngle || 0));
+  const angle = Math.min(60, Math.max(0, slope?.angle || 0));
   if (angle < 0.1) return null;
   const m = Math.tan((angle * Math.PI) / 180);
-  const [ax, ay] = slopeAscent(config.baseSlopeDir);
+  const [ax, ay] = slopeAscent(slope!.dir);
   const b = cellBounds(binCells);
   const corners: [number, number][] = [[b.minX, b.minY], [b.maxX, b.minY], [b.minX, b.maxY], [b.maxX, b.maxY]];
   const along = corners.map(([x, y]) => ax * x + ay * y);
@@ -526,7 +531,7 @@ function buildSlopedBaseManifold(
  */
 function generatePieceManifold(
   wasm: ManifoldToplevel, config: BinConfig, cells: GridCell[], binCells: GridCell[],
-  walls: EffectiveWalls,
+  walls: EffectiveWalls, slope: BinSlope | undefined,
 ): Manifold {
   const { Manifold } = wasm;
   const totalHeight = totalHeightOf(config);
@@ -557,7 +562,7 @@ function generatePieceManifold(
     // band clip), so the unions fuse through real volume.
     const additions: Manifold[] = buildInnerWallsManifold(
       wasm, config.innerWalls ?? [], outerCS, cavity.cs, totalHeight);
-    const wedge = buildSlopedBaseManifold(config, binCells, outerCS, cavity.cs, totalHeight);
+    const wedge = buildSlopedBaseManifold(slope, binCells, outerCS, cavity.cs, totalHeight);
     if (wedge) additions.push(wedge);
     if (additions.length) bin = Manifold.union([bin, ...additions]);
   }
@@ -630,7 +635,8 @@ export function generateBinManifold(wasm: ManifoldToplevel, config: BinConfig): 
     return manifoldMesh(geom3ToManifold(wasm, primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3));
   }
   const solids = groupBins(config.cells).map((bin) =>
-    generatePieceManifold(wasm, config, bin.cells, bin.cells, resolveWalls(bin.cells, bin.cells, config)));
+    generatePieceManifold(wasm, config, bin.cells, bin.cells,
+      resolveWalls(bin.cells, bin.cells, config), slopeForBin(config, bin.id)));
   return manifoldMesh(solids.length === 1 ? solids[0] : wasm.Manifold.union(solids));
 }
 
@@ -669,7 +675,8 @@ export function generateBinPieces(
     const parts = partitionCells(bin.cells, config.splitLines ?? []);
     parts.forEach((part, i) => {
       const solid = generatePieceManifold(
-        wasm, config, part.cells, bin.cells, resolveWalls(part.cells, bin.cells, config));
+        wasm, config, part.cells, bin.cells,
+        resolveWalls(part.cells, bin.cells, config), slopeForBin(config, bin.id));
       const mesh = manifoldMesh(solid);
       const minX = Math.min(...part.cells.map((c) => c.x));
       const minY = Math.min(...part.cells.map((c) => c.y));
@@ -779,12 +786,12 @@ function buildInnerWallsJscad(walls: InnerWall[], outerProfile: Geom2, totalHeig
 
 /** Fallback sloped base: a staircase of slabs under the slope plane (degraded mode). */
 function buildSlopedBaseJscad(
-  config: BinConfig, binCells: GridCell[], cavityCS: Geom2, totalHeight: number,
+  slope: BinSlope | undefined, binCells: GridCell[], cavityCS: Geom2, totalHeight: number,
 ): Geom3[] {
-  const angle = Math.min(60, Math.max(0, config.baseAngle || 0));
+  const angle = Math.min(60, Math.max(0, slope?.angle || 0));
   if (angle < 0.1) return [];
   const m = Math.tan((angle * Math.PI) / 180);
-  const [ax, ay] = slopeAscent(config.baseSlopeDir);
+  const [ax, ay] = slopeAscent(slope!.dir);
   const b = cellBounds(binCells);
   const corners: [number, number][] = [[b.minX, b.minY], [b.maxX, b.minY], [b.minX, b.maxY], [b.maxX, b.maxY]];
   const along = corners.map(([x, y]) => ax * x + ay * y);
@@ -823,6 +830,7 @@ function buildSlopedBaseJscad(
 
 function generatePieceJscad(
   config: BinConfig, cells: GridCell[], binCells: GridCell[], walls: EffectiveWalls,
+  slope: BinSlope | undefined,
 ): Geom3 {
   const totalHeight = totalHeightOf(config);
   const filletR = clampFilletR(config.innerFilletRadius, totalHeight);
@@ -837,7 +845,7 @@ function generatePieceJscad(
   if (cavity) {
     const additions = [
       ...buildInnerWallsJscad(config.innerWalls ?? [], outerProfile, totalHeight),
-      ...buildSlopedBaseJscad(config, binCells, cavity.cs, totalHeight),
+      ...buildSlopedBaseJscad(slope, binCells, cavity.cs, totalHeight),
     ];
     if (additions.length) bin = booleans.union(bin, ...additions) as Geom3;
   }
@@ -850,7 +858,8 @@ function generatePieceJscad(
 export function generateBin(config: BinConfig): Geom3 {
   if (config.cells.length === 0) return primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3;
   const solids = groupBins(config.cells).map((bin) =>
-    generatePieceJscad(config, bin.cells, bin.cells, resolveWalls(bin.cells, bin.cells, config)));
+    generatePieceJscad(config, bin.cells, bin.cells,
+      resolveWalls(bin.cells, bin.cells, config), slopeForBin(config, bin.id)));
   return union(solids);
 }
 
@@ -871,7 +880,8 @@ export function generateBinPiecesJscad(config: BinConfig): BinPieceGeom[] {
   return bins.flatMap((bin, bi) => {
     const parts = partitionCells(bin.cells, config.splitLines ?? []);
     return parts.map((part, i) => {
-      const geom = generatePieceJscad(config, part.cells, bin.cells, resolveWalls(part.cells, bin.cells, config));
+      const geom = generatePieceJscad(config, part.cells, bin.cells,
+        resolveWalls(part.cells, bin.cells, config), slopeForBin(config, bin.id));
       const minX = Math.min(...part.cells.map((c) => c.x));
       const minY = Math.min(...part.cells.map((c) => c.y));
       return {

@@ -46,10 +46,11 @@ src/
         ShapeTab.tsx      click/drag cell editor; resizable grid (up to 40×40),
                           multi-bin painting palette
         WallsTab.tsx      SVG edge editor (open walls, grid dividers) + drag-to-draw
-                          free-form inner walls with per-wall width/height list
+                          free-form inner walls (endpoints snap to grid lines,
+                          segments snap near 45° increments) with width/height list
         SplitTab.tsx      SVG split-line editor (auto-from-bed / manual) + piece fit
-        DimensionsTab.tsx height, wall thickness, cavity corner radius, inner fillet,
-                          base slope (angle + low side)
+        DimensionsTab.tsx height (1–20u), wall thickness, cavity corner radius,
+                          inner fillet, per-bin base slope (angle + low side)
         PrinterTab.tsx    printer presets + bed-fit warning
     viewer/
       BabylonViewer.tsx   Babylon.js canvas; reloads mesh on stlBuffer change
@@ -89,10 +90,11 @@ Geometry semantics worth knowing:
   as slabs of dilate(taller-material) ∩ wall-footprint that shrink with height
   and overshoot CSG_EPSILON *downward* (containment rule). The JSCAD fallback
   skips the ramps.
-- `baseAngle`/`baseSlopeDir` tilt the cavity floor: a wedge = cavityCS expanded
-  0.2 mm into the walls (flush-face membrane guard), clipped to the outer
-  profile, extruded and cut by `trimByPlane`. The slope plane spans the LOGICAL
-  BIN's bbox so split pieces line up. Fallback approximates with slab stairs.
+- `baseSlopes` tilts cavity floors PER LOGICAL BIN (`{bin, angle, dir}`; absent
+  = flat): a wedge = cavityCS expanded 0.2 mm into the walls (flush-face
+  membrane guard), clipped to the outer profile, extruded and cut by
+  `trimByPlane`. The slope plane spans the logical bin's bbox so split pieces
+  line up. Fallback approximates with slab stairs.
 - `GridCell.bin` (optional, default 0) assigns cells to distinct logical bins:
   each is generated independently with full perimeter walls (inter-bin edges
   are perimeter for both sides), exported as its own STL, spec 0.5 mm apart.

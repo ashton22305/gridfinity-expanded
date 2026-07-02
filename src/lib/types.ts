@@ -53,8 +53,16 @@ export interface BinConfig {
   innerWalls: InnerWall[];      // free-form (non-grid-aligned) walls inside the cavity
   splitMode: 'auto' | 'manual'; // auto = UI derives splitLines from the printer bed
   splitLines: SplitLine[];      // always the effective value the geometry consumes
-  baseAngle: number;            // cavity floor slope in degrees (0 = flat); walls stay vertical
-  baseSlopeDir: '+x' | '-x' | '+y' | '-y';  // side the floor is LOWEST at (shape-editor axes)
+  baseSlopes: BinSlope[];       // per-bin cavity floor tilt; bins without an entry are flat
+}
+
+export type SlopeDir = '+x' | '-x' | '+y' | '-y';  // side the floor is LOWEST at (shape-editor axes)
+
+/** Cavity floor tilt for one logical bin; walls stay vertical, base stays spec. */
+export interface BinSlope {
+  bin: number;
+  angle: number;   // degrees, 0 = flat
+  dir: SlopeDir;
 }
 
 export interface PrinterProfile {
