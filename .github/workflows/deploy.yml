@@ -9,6 +9,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write # allow pruning duplicate artifacts (see dedupe step)
 
 concurrency:
   group: pages
@@ -39,6 +40,28 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
+
+      # Work around actions/upload-pages-artifact#97: a timeout during upload
+      # finalization triggers a retry that leaves TWO artifacts named
+      # "github-pages", which makes deploy-pages fail with "Multiple artifacts
+      # named github-pages were unexpectedly found". Prune all but the newest.
+      - name: Prune duplicate github-pages artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              { owner, repo, run_id: context.runId, per_page: 100 }
+            );
+            const pages = artifacts
+              .filter(a => a.name === 'github-pages')
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            core.info(`Found ${pages.length} "github-pages" artifact(s)`);
+            for (const a of pages.slice(1)) {
+              core.info(`Deleting duplicate artifact ${a.id}`);
+              await github.rest.actions.deleteArtifact({ owner, repo, artifact_id: a.id });
+            }
 
       - uses: actions/deploy-pages@v4
         id: deployment
