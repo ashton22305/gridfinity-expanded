@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { generateBin, generateBinManifold } from '../lib/geometry/gridfinity';
+import { generateBinPieces, generateBinPiecesJscad } from '../lib/geometry/gridfinity';
 import { initManifold } from '../lib/geometry/manifold';
 // Vite resolves this to the hashed, base-path-aware asset URL for the WASM binary.
 import wasmUrl from 'manifold-3d/manifold.wasm?url';
@@ -12,9 +12,14 @@ import type { BinConfig } from '../lib/types';
 // pure-JS JSCAD path rather than leaving the app unable to generate anything.
 const manifoldReady = initManifold(() => wasmUrl).catch(() => null);
 
-/** JSCAD fallback: serialize a Geom3 to binary STL via @jscad/stl-serializer. */
-function jscadStl(config: BinConfig): ArrayBuffer {
-  const parts = serialize({ binary: true }, generateBin(config)) as ArrayBuffer[];
+interface PieceBuffers {
+  preview: ArrayBuffer;
+  pieces: { name: string; buffer: ArrayBuffer }[];
+}
+
+/** Serializes one or more JSCAD Geom3s to a single binary STL buffer. */
+function jscadStl(geoms: unknown[]): ArrayBuffer {
+  const parts = serialize({ binary: true }, ...geoms) as ArrayBuffer[];
   const total = parts.reduce((n, p) => n + p.byteLength, 0);
   const combined = new Uint8Array(total);
   let offset = 0;
@@ -25,26 +30,43 @@ function jscadStl(config: BinConfig): ArrayBuffer {
   return combined.buffer;
 }
 
+/** JSCAD fallback: split-aware generation via @jscad/stl-serializer. */
+function jscadPieces(config: BinConfig): PieceBuffers {
+  const parts = generateBinPiecesJscad(config);
+  return {
+    preview: jscadStl(parts.map((p) => p.previewGeom)),
+    pieces: parts.map((p) => ({ name: p.name, buffer: jscadStl([p.exportGeom]) })),
+  };
+}
+
 self.onmessage = async (e: MessageEvent<{ config: BinConfig; requestId: number }>) => {
   const { config, requestId } = e.data;
   try {
     const wasm = await manifoldReady;
-    let buffer: ArrayBuffer;
+    let result: PieceBuffers;
     if (wasm) {
-      const mesh = generateBinManifold(wasm, config);
-      buffer = meshToStl(mesh.vertProperties, mesh.triVerts);
+      const { pieces, preview } = generateBinPieces(wasm, config);
+      result = {
+        preview: meshToStl(preview.vertProperties, preview.triVerts),
+        pieces: pieces.map((p) => ({
+          name: p.name,
+          buffer: meshToStl(p.mesh.vertProperties, p.mesh.triVerts),
+        })),
+      };
     } else {
-      buffer = jscadStl(config);
+      result = jscadPieces(config);
     }
-    self.postMessage({ ok: true, buffer, requestId }, [buffer]);
+    self.postMessage({ ok: true, requestId, ...result },
+      [result.preview, ...result.pieces.map((p) => p.buffer)]);
   } catch (err) {
     // A failure in the manifold path (e.g. an unexpected degenerate input) still
     // yields a model via the JSCAD fallback before surfacing an error.
     try {
-      const buffer = jscadStl(config);
-      self.postMessage({ ok: true, buffer, requestId }, [buffer]);
+      const result = jscadPieces(config);
+      self.postMessage({ ok: true, requestId, ...result },
+        [result.preview, ...result.pieces.map((p) => p.buffer)]);
     } catch {
-      self.postMessage({ ok: false, error: String(err), requestId });
+      self.postMessage({ ok: false, requestId, error: String(err) });
     }
   }
 };

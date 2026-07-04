@@ -16,9 +16,12 @@
     "@jscad/3mf-serializer": "^2.1.17",
     "@jscad/modeling": "^2.13.0",
     "@jscad/stl-serializer": "^2.1.23",
+    "@tailwindcss/vite": "^4.3.2",
     "manifold-3d": "^3.5.1",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.2",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",

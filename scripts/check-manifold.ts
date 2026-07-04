@@ -9,10 +9,10 @@
  *
  * Run with `npm run check:manifold`. Exits non-zero if any case is defective.
  */
-import { generateBinManifold } from '../src/lib/geometry/gridfinity';
+import { generateBinManifold, generateBinPieces } from '../src/lib/geometry/gridfinity';
 import { initManifold, type BinMesh } from '../src/lib/geometry/manifold';
 import { meshToStl } from '../src/lib/export/stl';
-import type { BinConfig, GridCell } from '../src/lib/types';
+import type { BinConfig, GridCell, GridEdge } from '../src/lib/types';
 
 interface Report {
   triangles: number;
@@ -168,8 +168,14 @@ const T: GridCell[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 1, y
 const staircase: GridCell[] = [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 2 }];  // corner-touching only
 const disjoint: GridCell[] = [{ x: 0, y: 0 }, { x: 2, y: 0 }];                   // separated cells
 
+const h = (x: number, y: number): GridEdge => ({ orientation: 'h', x, y });
+const v = (x: number, y: number): GridEdge => ({ orientation: 'v', x, y });
+
 const base: Omit<BinConfig, 'cells'> = {
-  heightUnits: 3, wallThickness: 1.2, cornerRadius: 3.75, magnetHoles: true, screwHoles: false,
+  heightUnits: 3, wallThickness: 1.2, cavityCornerRadius: 3.75, innerFilletRadius: 0.5,
+  magnetHoles: true, screwHoles: false,
+  openEdges: [], dividerEdges: [], innerWalls: [], splitMode: 'manual', splitLines: [],
+  baseSlopes: [],
 };
 
 const cases: { name: string; config: BinConfig }[] = [
@@ -180,36 +186,113 @@ const cases: { name: string; config: BinConfig }[] = [
   { name: 'T-shape',             config: { ...base, cells: T } },
   { name: 'staircase (corners)', config: { ...base, cells: staircase } },
   { name: 'disjoint cells',      config: { ...base, cells: disjoint } },
-  { name: '1x1 h1 cornerR0',     config: { ...base, cells: rect(1, 1), heightUnits: 1, cornerRadius: 0 } },
+  { name: '1x1 h1 cavityR0',     config: { ...base, cells: rect(1, 1), heightUnits: 1, cavityCornerRadius: 0 } },
   { name: '1x1 h8 thickwall',    config: { ...base, cells: rect(1, 1), heightUnits: 8, wallThickness: 4 } },
-  { name: 'thickwall == corner', config: { ...base, cells: rect(1, 1), wallThickness: 3.75, cornerRadius: 3.75 } },
+  { name: 'thickwall + cavityR', config: { ...base, cells: rect(1, 1), wallThickness: 3.75, cavityCornerRadius: 3.75 } },
   { name: '2x2 magnet+screw',    config: { ...base, cells: rect(2, 2), magnetHoles: true, screwHoles: true } },
   { name: '2x2 no holes',        config: { ...base, cells: rect(2, 2), magnetHoles: false, screwHoles: false } },
   { name: '2x2 screw only',      config: { ...base, cells: rect(2, 2), magnetHoles: false, screwHoles: true } },
-  { name: '3x3 cornerR6',        config: { ...base, cells: rect(3, 3), cornerRadius: 6 } },
+  { name: '3x3 cavityR6',        config: { ...base, cells: rect(3, 3), cavityCornerRadius: 6 } },
+  { name: '2x2 fillet0',         config: { ...base, cells: rect(2, 2), innerFilletRadius: 0 } },
+  { name: '2x2 fillet3',         config: { ...base, cells: rect(2, 2), innerFilletRadius: 3 } },
+  { name: 'L-shape fillet2',     config: { ...base, cells: L, innerFilletRadius: 2 } },
+  { name: '1x1 h1 fillet3',      config: { ...base, cells: rect(1, 1), heightUnits: 1, innerFilletRadius: 3 } },
+  { name: 'thickwall fillet3',   config: { ...base, cells: rect(1, 1), wallThickness: 4, innerFilletRadius: 3 } },
   { name: 'empty (unit cube)',   config: { ...base, cells: [] } },
+  // Wall toggles
+  { name: '1x1 one side open',   config: { ...base, cells: rect(1, 1), openEdges: [h(0, 0)] } },
+  { name: '1x1 corner open',     config: { ...base, cells: rect(1, 1), openEdges: [h(0, 0), v(0, 0)] } },
+  { name: '1x1 all sides open',  config: { ...base, cells: rect(1, 1), openEdges: [h(0, 0), h(0, 1), v(0, 0), v(1, 0)] } },
+  { name: '1x1 all open rc20',   config: { ...base, cells: rect(1, 1), cavityCornerRadius: 20, openEdges: [h(0, 0), h(0, 1), v(0, 0), v(1, 0)] } },
+  { name: 'L concave edge open', config: { ...base, cells: L, openEdges: [v(1, 1)] } },
+  { name: '2x2 divider cross',   config: { ...base, cells: rect(2, 2), dividerEdges: [v(1, 0), v(1, 1), h(0, 1), h(1, 1)] } },
+  { name: '2x1 divider + open',  config: { ...base, cells: rect(2, 1), dividerEdges: [v(1, 0)], openEdges: [h(0, 0), h(1, 0)] } },
+  // Cavity corner radius clamping / interactions
+  { name: '1x1 rc20 (clamp)',    config: { ...base, cells: rect(1, 1), cavityCornerRadius: 20 } },
+  { name: '3x3 rc20 + dividers', config: { ...base, cells: rect(3, 3), cavityCornerRadius: 20, dividerEdges: [v(1, 0), v(1, 1), v(1, 2)] } },
+  { name: 'rc20 fillet10 thick', config: { ...base, cells: rect(2, 2), cavityCornerRadius: 20, innerFilletRadius: 10, wallThickness: 4 } },
+  // Free-form inner walls
+  { name: 'diag wall full',      config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 6, y1: 6, x2: 78, y2: 78, width: 1.6, height: null }] } },
+  { name: 'low wall ramps',      config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 0, y1: 40, x2: 84, y2: 44, width: 2, height: 8 }] } },
+  { name: 'low wall to open',    config: { ...base, cells: rect(1, 1), openEdges: [v(1, 0)], innerWalls: [{ x1: 0, y1: 21, x2: 42, y2: 21, width: 1.2, height: 6 }] } },
+  { name: 'low wall x divider',  config: { ...base, cells: rect(3, 1), dividerEdges: [v(1, 0)], innerWalls: [{ x1: 4, y1: 10, x2: 122, y2: 32, width: 1.6, height: 7 }] } },
+  { name: 'crossing wall hts',   config: { ...base, cells: rect(2, 2), innerWalls: [
+      { x1: 0, y1: 21, x2: 84, y2: 21, width: 1.6, height: 6 },
+      { x1: 43, y1: 0, x2: 41, y2: 84, width: 2, height: 14 },
+    ] } },
+  { name: 'wall rc20 fillet6',   config: { ...base, cells: rect(2, 2), cavityCornerRadius: 20, innerFilletRadius: 6, innerWalls: [{ x1: 0, y1: 30, x2: 84, y2: 60, width: 1.6, height: 8 }] } },
+  { name: 'wall in wall band',   config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 0, y1: 0.5, x2: 84, y2: 0.5, width: 1, height: null }] } },
+  // Sloped base
+  { name: 'slope 15 +y',         config: { ...base, cells: rect(2, 2), baseSlopes: [{ bin: 0, angle: 15, dir: '+y' }] } },
+  { name: 'slope 30 -x fillet3', config: { ...base, cells: rect(1, 1), baseSlopes: [{ bin: 0, angle: 30, dir: '-x' }], innerFilletRadius: 3 } },
+  { name: 'L slope 20 rc6',      config: { ...base, cells: L, baseSlopes: [{ bin: 0, angle: 20, dir: '+x' }], cavityCornerRadius: 6 } },
+  { name: 'slope 45 h1 clamp',   config: { ...base, cells: rect(2, 1), heightUnits: 1, baseSlopes: [{ bin: 0, angle: 45, dir: '-y' }] } },
+  { name: 'slope + low wall',    config: { ...base, cells: rect(2, 2), baseSlopes: [{ bin: 0, angle: 12, dir: '+x' }], innerWalls: [{ x1: 0, y1: 42, x2: 84, y2: 42, width: 1.6, height: 9 }] } },
+  // Multiple distinct bins
+  { name: '2 bins adjacent',     config: { ...base, cells: [
+      { x: 0, y: 0, bin: 0 }, { x: 0, y: 1, bin: 0 },
+      { x: 1, y: 0, bin: 1 }, { x: 1, y: 1, bin: 1 },
+    ] } },
+  { name: '2 bins 2 slopes',     config: { ...base, cells: [
+      { x: 0, y: 0, bin: 0 }, { x: 0, y: 1, bin: 0 },
+      { x: 1, y: 0, bin: 1 }, { x: 1, y: 1, bin: 1 },
+    ], baseSlopes: [
+      { bin: 0, angle: 18, dir: '+y' },
+      { bin: 1, angle: 25, dir: '-x' },
+    ] } },
+  { name: '1x1 h20 tall',        config: { ...base, cells: rect(1, 1), heightUnits: 20, baseSlopes: [{ bin: 0, angle: 30, dir: '+x' }] } },
+];
+
+const U: GridCell[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 0, y: 1 }, { x: 2, y: 1 }];
+
+// Split cases: every exported piece must independently pass all checks.
+const splitCases: { name: string; config: BinConfig }[] = [
+  { name: '6x1 split in 2',      config: { ...base, cells: rect(6, 1), splitLines: [{ axis: 'x', index: 3 }] } },
+  { name: '4x2 divider on seam', config: { ...base, cells: rect(4, 2), splitLines: [{ axis: 'x', index: 2 }], dividerEdges: [v(2, 0), v(2, 1)] } },
+  { name: 'L split (empty box)', config: { ...base, cells: L, splitLines: [{ axis: 'x', index: 1 }, { axis: 'y', index: 1 }] } },
+  { name: 'U split (disjoint)',  config: { ...base, cells: U, splitLines: [{ axis: 'y', index: 1 }] } },
+  { name: 'wall across seam',    config: { ...base, cells: rect(4, 1), splitLines: [{ axis: 'x', index: 2 }], innerWalls: [{ x1: 10, y1: 21, x2: 158, y2: 21, width: 1.6, height: 8 }] } },
+  { name: 'slope across seam',   config: { ...base, cells: rect(6, 1), baseSlopes: [{ bin: 0, angle: 8, dir: '-x' }], splitLines: [{ axis: 'x', index: 3 }] } },
+  { name: '2 bins + split',      config: { ...base, cells: [
+      { x: 0, y: 0, bin: 0 }, { x: 1, y: 0, bin: 0 }, { x: 2, y: 0, bin: 1 }, { x: 3, y: 0, bin: 1 },
+    ], splitLines: [{ axis: 'x', index: 1 }] } },
 ];
 
 (async () => {
   const wasm = await initManifold();
   let anyBad = false;
 
+  const check = (name: string, mesh: BinMesh): void => {
+    const r = analyzeIndexed(mesh);
+    const stl = stlBoundary(meshToStl(mesh.vertProperties, mesh.triVerts));
+    const bad = r.boundaryEdges || r.nonManifoldEdges || r.orientationErrors || r.degenerate || r.duplicateFaces || r.membranes || stl.boundary || stl.nonManifold;
+    if (bad) anyBad = true;
+    console.log(
+      `${name.padEnd(28)} tris=${String(r.triangles).padStart(6)} ` +
+      `boundary=${r.boundaryEdges} nonManifold=${r.nonManifoldEdges} orient=${r.orientationErrors} ` +
+      `degen=${r.degenerate} dupFace=${r.duplicateFaces} membrane=${r.membranes} | stl(bnd=${stl.boundary},nm=${stl.nonManifold})` +
+      (bad ? '  ✗ DEFECTIVE' : '  ✓ clean'),
+    );
+  };
+
   for (const { name, config } of cases) {
     try {
-      const mesh = generateBinManifold(wasm, config);
-      const r = analyzeIndexed(mesh);
-      const stl = stlBoundary(meshToStl(mesh.vertProperties, mesh.triVerts));
-      const bad = r.boundaryEdges || r.nonManifoldEdges || r.orientationErrors || r.degenerate || r.duplicateFaces || r.membranes || stl.boundary || stl.nonManifold;
-      if (bad) anyBad = true;
-      console.log(
-        `${name.padEnd(22)} tris=${String(r.triangles).padStart(6)} ` +
-        `boundary=${r.boundaryEdges} nonManifold=${r.nonManifoldEdges} orient=${r.orientationErrors} ` +
-        `degen=${r.degenerate} dupFace=${r.duplicateFaces} membrane=${r.membranes} | stl(bnd=${stl.boundary},nm=${stl.nonManifold})` +
-        (bad ? '  ✗ DEFECTIVE' : '  ✓ clean'),
-      );
+      check(name, generateBinManifold(wasm, config));
     } catch (err) {
       anyBad = true;
-      console.log(`${name.padEnd(22)} ERROR: ${String(err)}`);
+      console.log(`${name.padEnd(28)} ERROR: ${String(err)}`);
+    }
+  }
+
+  for (const { name, config } of splitCases) {
+    try {
+      const { pieces } = generateBinPieces(wasm, config);
+      for (const piece of pieces) {
+        check(`${name} [${piece.name.replace('gridfinity-bin-', '').replace('.stl', '')}]`, piece.mesh);
+      }
+    } catch (err) {
+      anyBad = true;
+      console.log(`${name.padEnd(28)} ERROR: ${String(err)}`);
     }
   }
 
