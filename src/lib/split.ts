@@ -1,6 +1,16 @@
 // Pure split-line partitioning. Split lines sit on integer grid coordinates and
 // slice the cell set into pieces; each piece is generated as an independent bin.
 import type { GridCell, SplitLine } from './types';
+import { toggleByKey } from './edges';
+
+export function lineKey(l: SplitLine): string {
+  return `${l.axis}:${l.index}`;
+}
+
+/** Toggle a split line in a config array, kept canonically sorted. */
+export function toggleSplitLine(lines: SplitLine[], l: SplitLine): SplitLine[] {
+  return sortSplitLines(toggleByKey(lines, l, lineKey));
+}
 
 export interface Piece {
   col: number;  // chunk index along x (0-based)

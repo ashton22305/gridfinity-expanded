@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { downloadStl } from '../lib/export/stl';
 import type { PieceStl } from '../hooks/useBinGeometry';
-import styles from './ExportMenu.module.css';
+import { Button } from './ui/Button';
 
 interface Props {
   pieces: PieceStl[];
@@ -11,6 +11,8 @@ interface Props {
 // Browsers can throttle bursts of downloads from one gesture; spacing them out
 // makes multi-piece "download all" reliable (some browsers may still prompt).
 const DOWNLOAD_SPACING_MS = 300;
+
+const BUTTON_SIZE = 'px-3.5 py-1.5 text-[0.85rem]';
 
 export function ExportMenu({ pieces, generating }: Props) {
   const disabled = generating || pieces.length === 0;
@@ -35,36 +37,41 @@ export function ExportMenu({ pieces, generating }: Props) {
 
   if (pieces.length <= 1) {
     return (
-      <button
-        className={styles.button}
+      <Button
+        variant="primary"
+        className={BUTTON_SIZE}
         disabled={disabled}
         onClick={() => pieces[0] && downloadStl(pieces[0].buffer, pieces[0].name)}
         title={disabled ? 'Waiting for geometry…' : 'Download STL file'}
       >
         Export STL
-      </button>
+      </Button>
     );
   }
 
   return (
-    <div className={styles.menuWrap} ref={menuRef}>
-      <button
-        className={styles.button}
+    <div className="relative" ref={menuRef}>
+      <Button
+        variant="primary"
+        className={BUTTON_SIZE}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         title={disabled ? 'Waiting for geometry…' : 'Download piece STL files'}
       >
         Export STL ({pieces.length} pieces) ▾
-      </button>
+      </Button>
       {open && !disabled && (
-        <div className={styles.menu}>
-          <button className={styles.menuItem} onClick={downloadAll}>
+        <div className="absolute top-[calc(100%+6px)] right-0 z-10 flex min-w-60 flex-col rounded-md border border-zinc-700 bg-zinc-900 p-1 shadow-xl shadow-black/40">
+          <button
+            className="mb-0.5 rounded-t border-b border-zinc-700 px-2.5 py-1.5 text-left text-[0.8rem] font-semibold text-white hover:bg-zinc-800"
+            onClick={downloadAll}
+          >
             Download all ({pieces.length})
           </button>
           {pieces.map((piece) => (
             <button
               key={piece.name}
-              className={styles.menuItem}
+              className="rounded px-2.5 py-1.5 text-left text-[0.8rem] text-zinc-200 hover:bg-zinc-800"
               onClick={() => { downloadStl(piece.buffer, piece.name); setOpen(false); }}
             >
               {piece.name}

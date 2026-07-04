@@ -120,3 +120,19 @@ export function sortEdges(edges: GridEdge[]): GridEdge[] {
   return [...edges].sort((a, b) =>
     a.orientation.localeCompare(b.orientation) || a.y - b.y || a.x - b.x);
 }
+
+/**
+ * Toggle an item's membership in a keyed collection: remove it if a matching
+ * key is present, otherwise append it. Shared by the Walls (edges) and Split
+ * (lines) editors so both handle config arrays identically.
+ */
+export function toggleByKey<T>(items: T[], item: T, key: (t: T) => string): T[] {
+  const k = key(item);
+  const without = items.filter((x) => key(x) !== k);
+  return without.length === items.length ? [...without, item] : without;
+}
+
+/** Toggle a perimeter/divider edge in a config array, kept canonically sorted. */
+export function toggleEdge(edges: GridEdge[], e: GridEdge): GridEdge[] {
+  return sortEdges(toggleByKey(edges, e, edgeKey));
+}

@@ -1,26 +1,21 @@
 import { useState } from 'react';
-import type { BinConfig } from '../../../lib/types';
+import { cellKey } from '../../../lib/edges';
 import { GRID_PITCH } from '../../../lib/geometry/gridfinity';
 import { getGridFootprintCells } from '../../../lib/printers';
 import { groupBins } from '../../../lib/split';
+import { MAX_GRID, minGridSize, useAppStore } from '../../../store';
 import { binColor } from '../binColors';
-import styles from './ShapeTab.module.css';
+import { Hint, Label } from '../../ui/Field';
+import { NumberInput } from '../../ui/inputs';
 
-interface Props {
-  config: BinConfig;
-  onChange: (next: BinConfig) => void;
-  gridCols: number;
-  gridRows: number;
-  onGridSizeChange: (cols: number, rows: number) => void;
+/** Grid gap in px: tighter as the cell count grows so large grids stay legible. */
+function cellGap(cols: number, rows: number): number {
+  if (cols > 14 || rows > 14) return 1;
+  return cols > 8 ? 2 : 4;
 }
 
-export const MAX_GRID = 40;
-
-function cellKey(c: { x: number; y: number }) {
-  return `${c.x},${c.y}`;
-}
-
-export function ShapeTab({ config, onChange, gridCols, gridRows, onGridSizeChange }: Props) {
+export function ShapeTab() {
+  const { config, updateConfig, gridCols, gridRows, setGridSize } = useAppStore();
   const cellBin = new Map(config.cells.map((c) => [cellKey(c), c.bin ?? 0]));
   const bins = groupBins(config.cells);
   const [activeBin, setActiveBin] = useState(0);
@@ -34,22 +29,21 @@ export function ShapeTab({ config, onChange, gridCols, gridRows, onGridSizeChang
   const paletteIds = [...new Set([...usedIds, Math.min(nextId, 7)])].sort((a, b) => a - b);
 
   function assignCell(x: number, y: number) {
-    const key = `${x},${y}`;
+    const key = cellKey({ x, y });
     if (cellBin.get(key) === activeBin) return;
-    onChange({
-      ...config,
+    updateConfig({
       cells: [...config.cells.filter((c) => cellKey(c) !== key), { x, y, bin: activeBin }],
     });
   }
 
   function removeCell(x: number, y: number) {
-    const key = `${x},${y}`;
+    const key = cellKey({ x, y });
     if (!cellBin.has(key)) return;
-    onChange({ ...config, cells: config.cells.filter((c) => cellKey(c) !== key) });
+    updateConfig({ cells: config.cells.filter((c) => cellKey(c) !== key) });
   }
 
   function handlePointerDown(x: number, y: number) {
-    if (cellBin.get(`${x},${y}`) === activeBin) {
+    if (cellBin.get(cellKey({ x, y })) === activeBin) {
       setPaintMode('remove');
       removeCell(x, y);
     } else {
@@ -63,87 +57,97 @@ export function ShapeTab({ config, onChange, gridCols, gridRows, onGridSizeChang
     if (paintMode === 'remove') removeCell(x, y);
   }
 
+  // Delegated cell events: one pair of handlers on the grid container reads the
+  // painted cell from data-attrs, so the up-to-1600 cell buttons carry no
+  // per-cell closures (rebuilt on every paint-drag render otherwise).
+  function cellFromEvent(e: React.PointerEvent): { x: number; y: number } | null {
+    const el = (e.target as HTMLElement).closest<HTMLElement>('[data-cell]');
+    return el ? { x: Number(el.dataset.x), y: Number(el.dataset.y) } : null;
+  }
+
   const cells = config.cells;
   const { widthCells, depthCells } = getGridFootprintCells(cells);
-  const minCols = Math.max(4, ...cells.map((c) => c.x + 1));
-  const minRows = Math.max(4, ...cells.map((c) => c.y + 1));
-
-  function changeSize(cols: number, rows: number) {
-    if (!Number.isFinite(cols) || !Number.isFinite(rows)) return;
-    onGridSizeChange(
-      Math.min(MAX_GRID, Math.max(minCols, Math.round(cols))),
-      Math.min(MAX_GRID, Math.max(minRows, Math.round(rows))),
-    );
-  }
+  const min = minGridSize(cells);  // setGridSize clamps; this only feeds the input min attrs
 
   return (
     <div
-      className={styles.shapeTab}
+      className="flex flex-col gap-3 select-none"
       onPointerUp={() => setPaintMode(null)}
       onPointerLeave={() => setPaintMode(null)}
     >
-      <div className={styles.sizeRow}>
-        <span className={styles.label}>Grid</span>
-        <input
-          type="number"
-          min={minCols}
+      <div className="flex items-center gap-1.5">
+        <Label>Grid</Label>
+        <NumberInput
+          min={min.cols}
           max={MAX_GRID}
           value={gridCols}
-          onChange={(e) => changeSize(Number(e.target.value), gridRows)}
-          className={styles.sizeInput}
+          onChange={(e) => setGridSize(Number(e.target.value), gridRows)}
+          className="w-[52px] px-1.5 py-1 text-[0.8rem]"
           aria-label="Grid columns"
         />
-        <span className={styles.times}>×</span>
-        <input
-          type="number"
-          min={minRows}
+        <span className="text-[0.8rem] text-zinc-500">×</span>
+        <NumberInput
+          min={min.rows}
           max={MAX_GRID}
           value={gridRows}
-          onChange={(e) => changeSize(gridCols, Number(e.target.value))}
-          className={styles.sizeInput}
+          onChange={(e) => setGridSize(gridCols, Number(e.target.value))}
+          className="w-[52px] px-1.5 py-1 text-[0.8rem]"
           aria-label="Grid rows"
         />
-        <span className={styles.times}>cells</span>
+        <span className="text-[0.8rem] text-zinc-500">cells</span>
       </div>
 
-      <div className={styles.binRow}>
-        {paletteIds.map((id) => (
-          <button
-            key={id}
-            className={`${styles.binButton} ${activeBin === id ? styles.binActive : ''}`}
-            style={{ '--bin-color': binColor(id) } as React.CSSProperties}
-            onClick={() => setActiveBin(id)}
-            title={usedIds.includes(id) ? `Paint bin ${id + 1}` : 'Start a new bin'}
-          >
-            <i className={styles.binSwatch} />
-            {usedIds.includes(id) ? `Bin ${id + 1}` : '+ New'}
-          </button>
-        ))}
+      <div className="flex flex-wrap gap-1.5">
+        {paletteIds.map((id) => {
+          const active = activeBin === id;
+          return (
+            <button
+              key={id}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${
+                active ? 'text-white' : 'text-zinc-400 hover:bg-zinc-700'
+              } border-zinc-700 bg-zinc-800`}
+              style={active ? { borderColor: binColor(id) } : undefined}
+              onClick={() => setActiveBin(id)}
+              title={usedIds.includes(id) ? `Paint bin ${id + 1}` : 'Start a new bin'}
+            >
+              <i
+                className="inline-block size-2.5 rounded-[3px]"
+                style={{ background: binColor(id) }}
+              />
+              {usedIds.includes(id) ? `Bin ${id + 1}` : '+ New'}
+            </button>
+          );
+        })}
       </div>
 
-      <p className={styles.hint}>
+      <Hint>
         Click or drag to toggle cells for the selected bin. Adjacent bins are
         printed as separate, complete bins.
-      </p>
+      </Hint>
       <div
-        className={styles.grid}
+        className="grid w-full touch-none"
         style={{
           gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
           aspectRatio: `${gridCols} / ${gridRows}`,
-          gap: gridCols > 14 || gridRows > 14 ? 1 : gridCols > 8 ? 2 : 4,
+          gap: cellGap(gridCols, gridRows),
         }}
+        onPointerDown={(e) => { const c = cellFromEvent(e); if (c) handlePointerDown(c.x, c.y); }}
+        onPointerOver={(e) => { if (paintMode) { const c = cellFromEvent(e); if (c) handlePointerEnter(c.x, c.y); } }}
       >
         {Array.from({ length: gridRows }, (_, row) =>
           Array.from({ length: gridCols }, (_, col) => {
-            const bin = cellBin.get(`${col},${row}`);
+            const bin = cellBin.get(cellKey({ x: col, y: row }));
             const isSelected = bin !== undefined;
             return (
               <button
                 key={`${col}-${row}`}
-                className={`${styles.cell} ${isSelected ? styles.selected : ''}`}
+                data-cell data-x={col} data-y={row}
+                className={`aspect-square min-h-0 min-w-0 rounded-[2px] border transition-colors ${
+                  isSelected
+                    ? 'hover:brightness-120'
+                    : 'border-zinc-700 bg-zinc-800 hover:border-zinc-500 hover:bg-zinc-700'
+                }`}
                 style={isSelected ? { background: binColor(bin), borderColor: binColor(bin) } : undefined}
-                onPointerDown={() => handlePointerDown(col, row)}
-                onPointerEnter={() => handlePointerEnter(col, row)}
                 aria-label={`Cell ${col},${row}`}
                 aria-pressed={isSelected}
               />
@@ -151,7 +155,7 @@ export function ShapeTab({ config, onChange, gridCols, gridRows, onGridSizeChang
           })
         )}
       </div>
-      <div className={styles.stats}>
+      <div className="flex flex-col gap-0.5 text-[0.8rem] text-zinc-500">
         <span>
           {cells.length} cell{cells.length !== 1 ? 's' : ''}
           {bins.length > 1 ? ` in ${bins.length} bins` : ''}

@@ -199,6 +199,42 @@ function buildOuterProfile(cells: GridCell[]): Geom2 {
   ) as Geom2;
 }
 
+/** Pitch-aligned bounding box of a piece's cells, in mm (the split slab). */
+function piecePitchBox(cells: GridCell[]): Rect {
+  const b = cellBounds(cells);
+  return { x: b.minX, y: b.minY, w: b.maxX - b.minX, h: b.maxY - b.minY };
+}
+
+/**
+ * Outer profile for one piece of a possibly-split logical bin. A whole bin is
+ * the spec profile of its own cells (`binOuterCS`, precomputed once per bin by
+ * the caller). A split piece is that whole-BIN profile cut by the piece's pitch
+ * box, so every seam face lands exactly on the split-line pitch plane —
+ * square-cornered, without the 0.25 mm perimeter clearance — and glued pieces
+ * butt flush into the unsplit bin. (A profile built from the piece's own cells
+ * insets and corner-rounds seam faces like outer walls: assembled pieces sit
+ * 0.5 mm apart, with the floor/fillet band standing proud of the rounded-back
+ * wall ends.) Non-seam sides of the box lie on footprint pitch lines the spec
+ * profile never reaches, so only seam faces are affected.
+ */
+function pieceProfileCS(
+  wasm: ManifoldToplevel, cells: GridCell[], binCells: GridCell[], binOuterCS: CrossSection,
+): CrossSection {
+  if (cells.length === binCells.length) return binOuterCS;
+  return binOuterCS.intersect(new wasm.CrossSection(rectPoly(piecePitchBox(cells))));
+}
+
+/** JSCAD-fallback twin of pieceProfileCS (degraded mode: keeps the piece-cell
+ *  profile — 0.25 mm-inset seams — if the 2D intersect throws). */
+function pieceProfileJscad(cells: GridCell[], binCells: GridCell[], binOuterProfile: Geom2): Geom2 {
+  if (cells.length === binCells.length) return binOuterProfile;
+  try {
+    const cut = booleans.intersect(binOuterProfile, rectGeom2(piecePitchBox(cells))) as Geom2;
+    if (geom2Area(cut) > 1e-6) return cut;
+  } catch { /* degraded mode: accept the inset seam */ }
+  return buildOuterProfile(cells);
+}
+
 /** Connector pegs for all cells unified with the solid bridge and bin walls. */
 function buildShell(cells: GridCell[], totalHeight: number, outerProfile: Geom2): Geom3 {
   const pegs: Geom3 = union(cells.flatMap(({ x, y }) =>
@@ -531,7 +567,7 @@ function buildSlopedBaseManifold(
  */
 function generatePieceManifold(
   wasm: ManifoldToplevel, config: BinConfig, cells: GridCell[], binCells: GridCell[],
-  walls: EffectiveWalls, slope: BinSlope | undefined,
+  binOuterCS: CrossSection, walls: EffectiveWalls, slope: BinSlope | undefined,
 ): Manifold {
   const { Manifold } = wasm;
   const totalHeight = totalHeightOf(config);
@@ -539,7 +575,7 @@ function generatePieceManifold(
   const rc = Math.max(0, config.cavityCornerRadius || 0);
 
   // Positive solids: the connector pegs plus the extruded body/wall column.
-  const outerCS = geom2ToCrossSection(wasm, buildOuterProfile(cells));
+  const outerCS = pieceProfileCS(wasm, cells, binCells, binOuterCS);
   const solids: Manifold[] = cells.flatMap(({ x, y }) =>
     pegSections(x * GRID_PITCH + GRID_PITCH / 2, y * GRID_PITCH + GRID_PITCH / 2)
       .map((s) => geom3ToManifold(wasm, s)),
@@ -634,9 +670,11 @@ export function generateBinManifold(wasm: ManifoldToplevel, config: BinConfig): 
   if (config.cells.length === 0) {
     return manifoldMesh(geom3ToManifold(wasm, primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3));
   }
-  const solids = groupBins(config.cells).map((bin) =>
-    generatePieceManifold(wasm, config, bin.cells, bin.cells,
-      resolveWalls(bin.cells, bin.cells, config), slopeForBin(config, bin.id)));
+  const solids = groupBins(config.cells).map((bin) => {
+    const binOuterCS = geom2ToCrossSection(wasm, buildOuterProfile(bin.cells));
+    return generatePieceManifold(wasm, config, bin.cells, bin.cells, binOuterCS,
+      resolveWalls(bin.cells, bin.cells, config), slopeForBin(config, bin.id));
+  });
   return manifoldMesh(solids.length === 1 ? solids[0] : wasm.Manifold.union(solids));
 }
 
@@ -670,12 +708,15 @@ export function generateBinPieces(
   const bins = groupBins(config.cells);
   const pieces: BinPiece[] = [];
   const previewMeshes: BinMesh[] = [];
-  const anySplit = bins.some((bin) => partitionCells(bin.cells, config.splitLines ?? []).length > 1);
+  const partsByBin = bins.map((bin) => partitionCells(bin.cells, config.splitLines ?? []));
+  const anySplit = partsByBin.some((parts) => parts.length > 1);
   bins.forEach((bin, bi) => {
-    const parts = partitionCells(bin.cells, config.splitLines ?? []);
+    const parts = partsByBin[bi];
+    // Whole-bin spec profile, built once and shared by every piece of this bin.
+    const binOuterCS = geom2ToCrossSection(wasm, buildOuterProfile(bin.cells));
     parts.forEach((part, i) => {
       const solid = generatePieceManifold(
-        wasm, config, part.cells, bin.cells,
+        wasm, config, part.cells, bin.cells, binOuterCS,
         resolveWalls(part.cells, bin.cells, config), slopeForBin(config, bin.id));
       const mesh = manifoldMesh(solid);
       const minX = Math.min(...part.cells.map((c) => c.x));
@@ -829,14 +870,14 @@ function buildSlopedBaseJscad(
 }
 
 function generatePieceJscad(
-  config: BinConfig, cells: GridCell[], binCells: GridCell[], walls: EffectiveWalls,
-  slope: BinSlope | undefined,
+  config: BinConfig, cells: GridCell[], binCells: GridCell[], binOuterProfile: Geom2,
+  walls: EffectiveWalls, slope: BinSlope | undefined,
 ): Geom3 {
   const totalHeight = totalHeightOf(config);
   const filletR = clampFilletR(config.innerFilletRadius, totalHeight);
   const rc = Math.max(0, config.cavityCornerRadius || 0);
 
-  const outerProfile = buildOuterProfile(cells);
+  const outerProfile = pieceProfileJscad(cells, binCells, binOuterProfile);
   const shell = buildShell(cells, totalHeight, outerProfile);
   const plan = planCavity(cells, walls, config.wallThickness, Math.max(rc, filletR) + 1);
   const cavity = buildCavityJscad(plan, rc, filletR, totalHeight);
@@ -858,7 +899,7 @@ function generatePieceJscad(
 export function generateBin(config: BinConfig): Geom3 {
   if (config.cells.length === 0) return primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3;
   const solids = groupBins(config.cells).map((bin) =>
-    generatePieceJscad(config, bin.cells, bin.cells,
+    generatePieceJscad(config, bin.cells, bin.cells, buildOuterProfile(bin.cells),
       resolveWalls(bin.cells, bin.cells, config), slopeForBin(config, bin.id)));
   return union(solids);
 }
@@ -876,11 +917,14 @@ export function generateBinPiecesJscad(config: BinConfig): BinPieceGeom[] {
     return [{ name: pieceName(0, 1, 0, 1), exportGeom: geom, previewGeom: geom }];
   }
   const bins = groupBins(config.cells);
-  const anySplit = bins.some((bin) => partitionCells(bin.cells, config.splitLines ?? []).length > 1);
+  const partsByBin = bins.map((bin) => partitionCells(bin.cells, config.splitLines ?? []));
+  const anySplit = partsByBin.some((parts) => parts.length > 1);
   return bins.flatMap((bin, bi) => {
-    const parts = partitionCells(bin.cells, config.splitLines ?? []);
+    const parts = partsByBin[bi];
+    // Whole-bin spec profile, built once and shared by every piece of this bin.
+    const binOuterProfile = buildOuterProfile(bin.cells);
     return parts.map((part, i) => {
-      const geom = generatePieceJscad(config, part.cells, bin.cells,
+      const geom = generatePieceJscad(config, part.cells, bin.cells, binOuterProfile,
         resolveWalls(part.cells, bin.cells, config), slopeForBin(config, bin.id));
       const minX = Math.min(...part.cells.map((c) => c.x));
       const minY = Math.min(...part.cells.map((c) => c.y));

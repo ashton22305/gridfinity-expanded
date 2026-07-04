@@ -1,25 +1,17 @@
-import { useRef, useState } from 'react';
-import type { BinConfig, GridEdge, InnerWall } from '../../../lib/types';
+import { useMemo, useRef, useState } from 'react';
+import type { GridEdge, InnerWall } from '../../../lib/types';
 import {
-  edgeKey, sortEdges, perimeterEdges, internalEdges,
+  edgeKey, perimeterEdges, internalEdges, toggleEdge,
 } from '../../../lib/edges';
 import { groupBins } from '../../../lib/split';
 import { GRID_PITCH, HEIGHT_PER_UNIT, FLOOR_THICKNESS } from '../../../lib/geometry/gridfinity';
-import { binColor } from '../binColors';
-import styles from './WallsTab.module.css';
+import { useAppStore } from '../../../store';
+import { EditorCanvas } from '../EditorCanvas';
+import { CELL, gridToSvg, mmToSvg, pointerToMm } from '../editorCoords';
+import { Hint, Label } from '../../ui/Field';
+import { Button } from '../../ui/Button';
+import { NumberInput } from '../../ui/inputs';
 
-interface Props {
-  config: BinConfig;
-  onChange: (next: BinConfig) => void;
-  gridCols: number;
-  gridRows: number;
-}
-
-const CELL = 40;   // svg units per cell
-const PAD = 8;
-
-const mmToSvg = (mm: number) => PAD + (mm / GRID_PITCH) * CELL;
-const svgToMm = (u: number) => ((u - PAD) / CELL) * GRID_PITCH;
 const snapMm = (mm: number) => Math.round(mm * 2) / 2;
 
 // Drawing aids: endpoints magnetize to grid lines within GRID_SNAP_MM, and the
@@ -52,59 +44,89 @@ function snapEnd(x1: number, y1: number, p: { x: number; y: number }): { x2: num
 }
 
 function edgeEndpoints(e: GridEdge): { x1: number; y1: number; x2: number; y2: number } {
-  const x = PAD + e.x * CELL;
-  const y = PAD + e.y * CELL;
+  const x = gridToSvg(e.x);
+  const y = gridToSvg(e.y);
   return e.orientation === 'h'
     ? { x1: x, y1: y, x2: x + CELL, y2: y }
     : { x1: x, y1: y, x2: x, y2: y + CELL };
 }
 
-function toggleEdge(edges: GridEdge[], e: GridEdge): GridEdge[] {
-  const key = edgeKey(e);
-  const without = edges.filter((x) => edgeKey(x) !== key);
-  return sortEdges(without.length === edges.length ? [...edges, e] : without);
-}
-
 interface Draft { x1: number; y1: number; x2: number; y2: number }
 
-export function WallsTab({ config, onChange, gridCols, gridRows }: Props) {
+const LEGEND = [
+  { label: 'wall', swatch: 'bg-slate-400' },
+  { label: 'open', swatch: 'bg-[repeating-linear-gradient(90deg,#52525b_0_3px,transparent_3px_6px)]' },
+  { label: 'divider', swatch: 'bg-blue-600' },
+  { label: 'custom', swatch: 'bg-teal-500' },
+];
+
+export function WallsTab() {
+  const { config, updateConfig, gridCols, gridRows } = useAppStore();
   const { cells, openEdges, dividerEdges, innerWalls } = config;
   const svgRef = useRef<SVGSVGElement>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
 
-  const openSet = new Set(openEdges.map(edgeKey));
-  const dividerSet = new Set(dividerEdges.map(edgeKey));
   const hasOverrides = openEdges.length > 0 || dividerEdges.length > 0;
   const cavityDepth = HEIGHT_PER_UNIT * config.heightUnits - FLOOR_THICKNESS;
 
   // Multi-bin classification: an edge between two different bins is a
   // perimeter edge of BOTH bins (a real double wall); internal edges exist
-  // only within a single bin.
-  const bins = groupBins(cells);
-  const perimeter = new Map<string, GridEdge>();
-  const internal = new Map<string, GridEdge>();
-  for (const b of bins) {
-    for (const e of perimeterEdges(b.cells)) perimeter.set(edgeKey(e), e);
-    for (const e of internalEdges(b.cells)) internal.set(edgeKey(e), e);
-  }
+  // only within a single bin. Memoized so the per-pointer-move draft renders
+  // don't re-run the flood fill and edge scans.
+  const { perimeter, internal } = useMemo(() => {
+    const perimeter = new Map<string, GridEdge>();
+    const internal = new Map<string, GridEdge>();
+    for (const b of groupBins(cells)) {
+      for (const e of perimeterEdges(b.cells)) perimeter.set(edgeKey(e), e);
+      for (const e of internalEdges(b.cells)) internal.set(edgeKey(e), e);
+    }
+    return { perimeter, internal };
+  }, [cells]);
+
+  // Rendered edge overlay. Memoized so per-pointer-move draft renders (setDraft
+  // fires on every move while drawing) don't reconcile the whole edge layer.
+  // Perimeter edges toggle openEdges (wall removed); internal toggle dividerEdges.
+  const edgeElements = useMemo(() => {
+    const layers = [
+      {
+        edges: [...perimeter.values()],
+        activeSet: new Set(openEdges.map(edgeKey)),
+        toggle: (e: GridEdge) => updateConfig({ openEdges: toggleEdge(openEdges, e) }),
+        activeClass: 'stroke-zinc-600 [stroke-width:2] [stroke-dasharray:4_5] group-hover:stroke-zinc-500',  // open
+        inactiveClass: 'stroke-slate-400 [stroke-width:4] group-hover:stroke-slate-300',                     // solid wall
+      },
+      {
+        edges: [...internal.values()],
+        activeSet: new Set(dividerEdges.map(edgeKey)),
+        toggle: (e: GridEdge) => updateConfig({ dividerEdges: toggleEdge(dividerEdges, e) }),
+        activeClass: 'stroke-blue-600 [stroke-width:4] group-hover:stroke-blue-500',  // divider
+        inactiveClass: 'stroke-zinc-700 [stroke-width:1.5] [stroke-dasharray:2_4] group-hover:stroke-blue-600 group-hover:[stroke-width:3]',  // ghost
+      },
+    ];
+    return layers.flatMap(({ edges, activeSet, toggle, activeClass, inactiveClass }) =>
+      edges.map((e) => {
+        const key = edgeKey(e);
+        const p = edgeEndpoints(e);
+        return (
+          <g key={key} className="group cursor-pointer" onClick={() => toggle(e)}>
+            <line {...p} stroke="transparent" strokeWidth={12} strokeLinecap="round" />
+            <line
+              {...p}
+              className={`pointer-events-none ${activeSet.has(key) ? activeClass : inactiveClass}`}
+              strokeLinecap="round"
+            />
+          </g>
+        );
+      }),
+    );
+  }, [perimeter, internal, openEdges, dividerEdges, updateConfig]);
 
   if (cells.length === 0) {
-    return (
-      <div className={styles.tab}>
-        <p className={styles.hint}>Select cells in the Shape tab first.</p>
-      </div>
-    );
+    return <Hint>Select cells in the Shape tab first.</Hint>;
   }
 
-  const viewW = gridCols * CELL + PAD * 2;
-  const viewH = gridRows * CELL + PAD * 2;
-
   function svgPoint(e: React.PointerEvent): { x: number; y: number } {
-    const rect = svgRef.current!.getBoundingClientRect();
-    return {
-      x: svgToMm(((e.clientX - rect.left) / rect.width) * viewW),
-      y: svgToMm(((e.clientY - rect.top) / rect.height) * viewH),
-    };
+    return pointerToMm(svgRef.current!, e);
   }
 
   function startDraw(e: React.PointerEvent) {
@@ -123,8 +145,7 @@ export function WallsTab({ config, onChange, gridCols, gridRows }: Props) {
     if (!draft) return;
     const length = Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1);
     if (length >= 5) {
-      onChange({
-        ...config,
+      updateConfig({
         innerWalls: [...innerWalls, { ...draft, width: 1.2, height: null }],
       });
     }
@@ -132,133 +153,86 @@ export function WallsTab({ config, onChange, gridCols, gridRows }: Props) {
   }
 
   function updateWall(i: number, patch: Partial<InnerWall>) {
-    onChange({
-      ...config,
+    updateConfig({
       innerWalls: innerWalls.map((w, j) => (j === i ? { ...w, ...patch } : w)),
     });
   }
 
   function removeWall(i: number) {
-    onChange({ ...config, innerWalls: innerWalls.filter((_, j) => j !== i) });
+    updateConfig({ innerWalls: innerWalls.filter((_, j) => j !== i) });
   }
 
   return (
-    <div className={styles.tab}>
-      <p className={styles.hint}>
+    <div className="flex flex-col gap-3 select-none">
+      <Hint>
         Click outer edges to remove/restore walls, inner edges to add grid
         dividers. Drag inside a bin to draw a custom wall at any angle —
         endpoints snap to grid lines, and the wall snaps near 45° increments.
-      </p>
-      <svg
+      </Hint>
+      <EditorCanvas
         ref={svgRef}
-        className={styles.editor}
-        viewBox={`0 0 ${viewW} ${viewH}`}
-        style={{ aspectRatio: `${viewW} / ${viewH}` }}
+        gridCols={gridCols}
+        gridRows={gridRows}
+        cells={cells}
         onPointerMove={moveDraw}
         onPointerUp={endDraw}
       >
-        {Array.from({ length: gridRows }, (_, row) =>
-          Array.from({ length: gridCols }, (_, col) => (
-            <rect
-              key={`bg${col},${row}`}
-              className={styles.bgRect}
-              x={PAD + col * CELL + 2}
-              y={PAD + row * CELL + 2}
-              width={CELL - 4}
-              height={CELL - 4}
-              rx={3}
-            />
-          ))
-        )}
-        {cells.map((c) => (
-          <rect
-            key={`c${c.x},${c.y}`}
-            className={styles.cellRect}
-            style={{ fill: binColor(c.bin), fillOpacity: 0.22 }}
-            x={PAD + c.x * CELL}
-            y={PAD + c.y * CELL}
-            width={CELL}
-            height={CELL}
-          />
-        ))}
         {/* invisible catcher for free-wall drawing; edges render above it */}
         <rect
-          x={0} y={0} width={viewW} height={viewH}
+          width="100%" height="100%"
           fill="transparent"
           onPointerDown={startDraw}
         />
-        {[...perimeter.values()].map((e) => {
-          const p = edgeEndpoints(e);
-          const isOpen = openSet.has(edgeKey(e));
-          return (
-            <g
-              key={edgeKey(e)}
-              className={styles.edgeHit}
-              onClick={() => onChange({ ...config, openEdges: toggleEdge(openEdges, e) })}
-            >
-              <line {...p} className={styles.hitLine} />
-              <line {...p} className={isOpen ? styles.openWall : styles.wall} />
-            </g>
-          );
-        })}
-        {[...internal.values()].map((e) => {
-          const p = edgeEndpoints(e);
-          const isDivider = dividerSet.has(edgeKey(e));
-          return (
-            <g
-              key={edgeKey(e)}
-              className={styles.edgeHit}
-              onClick={() => onChange({ ...config, dividerEdges: toggleEdge(dividerEdges, e) })}
-            >
-              <line {...p} className={styles.hitLine} />
-              <line {...p} className={isDivider ? styles.divider : styles.ghostDivider} />
-            </g>
-          );
-        })}
+        {edgeElements}
         {innerWalls.map((w, i) => (
           <line
             key={`w${i}`}
-            className={styles.innerWall}
+            className="pointer-events-none stroke-teal-500"
             x1={mmToSvg(w.x1)} y1={mmToSvg(w.y1)}
             x2={mmToSvg(w.x2)} y2={mmToSvg(w.y2)}
             strokeWidth={Math.max(2.5, (w.width / GRID_PITCH) * CELL)}
+            strokeLinecap="round"
           />
         ))}
         {draft && (
           <line
-            className={styles.draftWall}
+            className="pointer-events-none stroke-teal-400"
             x1={mmToSvg(draft.x1)} y1={mmToSvg(draft.y1)}
             x2={mmToSvg(draft.x2)} y2={mmToSvg(draft.y2)}
+            strokeWidth={3} strokeDasharray="5 4" strokeLinecap="round"
           />
         )}
-      </svg>
-      <div className={styles.legend}>
-        <span><i className={styles.swatchWall} /> wall</span>
-        <span><i className={styles.swatchOpen} /> open</span>
-        <span><i className={styles.swatchDivider} /> divider</span>
-        <span><i className={styles.swatchInner} /> custom</span>
+      </EditorCanvas>
+      <div className="flex flex-wrap items-center gap-3.5 text-xs text-zinc-500">
+        {LEGEND.map(({ label, swatch }) => (
+          <span key={label} className="inline-flex items-center gap-1">
+            <i className={`inline-block h-[3px] w-4 rounded-sm ${swatch}`} /> {label}
+          </span>
+        ))}
       </div>
-      <button
-        className={styles.resetButton}
+      <Button
+        className="self-start px-3 py-1 text-[0.8rem]"
         disabled={!hasOverrides}
-        onClick={() => onChange({ ...config, openEdges: [], dividerEdges: [] })}
+        onClick={() => updateConfig({ openEdges: [], dividerEdges: [] })}
       >
         Reset grid walls
-      </button>
+      </Button>
 
       {innerWalls.length > 0 && (
-        <div className={styles.wallList}>
-          <span className={styles.listTitle}>Custom walls</span>
+        <div className="flex flex-col gap-1.5">
+          <Label>Custom walls</Label>
           {innerWalls.map((w, i) => {
             const length = Math.hypot(w.x2 - w.x1, w.y2 - w.y1);
             const full = w.height == null;
             return (
-              <div key={i} className={styles.wallRow}>
-                <span className={styles.wallLen}>#{i + 1} · {length.toFixed(0)} mm</span>
-                <label className={styles.wallField}>
+              <div
+                key={i}
+                className="flex items-center gap-2 rounded-md bg-zinc-800/70 px-2 py-1 text-xs text-zinc-400"
+              >
+                <span className="flex-1 text-zinc-300">#{i + 1} · {length.toFixed(0)} mm</span>
+                <label className="inline-flex items-center gap-1">
                   w
-                  <input
-                    type="number"
+                  <NumberInput
                     min={0.4}
                     max={8}
                     step={0.2}
@@ -267,13 +241,12 @@ export function WallsTab({ config, onChange, gridCols, gridRows }: Props) {
                       const v = parseFloat(e.target.value);
                       if (!isNaN(v)) updateWall(i, { width: v });
                     }}
-                    className={styles.wallInput}
+                    className="w-[46px] px-1 py-0.5 text-xs"
                   />
                 </label>
-                <label className={styles.wallField}>
+                <label className="inline-flex items-center gap-1">
                   h
-                  <input
-                    type="number"
+                  <NumberInput
                     min={0.5}
                     max={Math.round(cavityDepth * 2) / 2}
                     step={0.5}
@@ -284,10 +257,10 @@ export function WallsTab({ config, onChange, gridCols, gridRows }: Props) {
                       const v = parseFloat(e.target.value);
                       if (!isNaN(v)) updateWall(i, { height: v });
                     }}
-                    className={styles.wallInput}
+                    className="w-[46px] px-1 py-0.5 text-xs"
                   />
                 </label>
-                <label className={styles.wallFull}>
+                <label className="inline-flex cursor-pointer items-center gap-1">
                   <input
                     type="checkbox"
                     checked={full}
@@ -298,7 +271,7 @@ export function WallsTab({ config, onChange, gridCols, gridRows }: Props) {
                   full
                 </label>
                 <button
-                  className={styles.wallDelete}
+                  className="rounded px-1.5 text-[0.95rem] text-red-400 hover:bg-red-950/60"
                   onClick={() => removeWall(i)}
                   aria-label={`Delete wall ${i + 1}`}
                 >
@@ -307,10 +280,10 @@ export function WallsTab({ config, onChange, gridCols, gridRows }: Props) {
               </div>
             );
           })}
-          <p className={styles.hint}>
+          <Hint>
             Lower walls ramp smoothly into taller walls they touch. Widths and
             heights are in mm; height is measured from the cavity floor.
-          </p>
+          </Hint>
         </div>
       )}
     </div>

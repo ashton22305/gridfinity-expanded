@@ -12,7 +12,6 @@ import {
   StandardMaterial,
 } from '@babylonjs/core';
 import '@babylonjs/loaders/STL';
-import styles from './BabylonViewer.module.css';
 
 interface Props {
   stlBuffer: ArrayBuffer | null;
@@ -109,17 +108,23 @@ export function BabylonViewer({ stlBuffer, generating, error }: Props) {
       });
   }, [stlBuffer]);
 
+  const overlay =
+    'pointer-events-none absolute inset-0 flex items-center justify-center gap-2.5 text-[0.9rem]';
+
   return (
-    <div className={styles.container}>
-      <canvas ref={canvasRef} className={styles.canvas} />
+    <div className="relative size-full overflow-hidden bg-zinc-900">
+      <canvas ref={canvasRef} className="block size-full outline-none" />
       {generating && (
-        <div className={styles.overlay}>
-          <span className={styles.spinner} aria-hidden="true" />
+        <div className={`${overlay} bg-zinc-900/70 text-zinc-300`}>
+          <span
+            className="inline-block size-[18px] animate-spin rounded-full border-2 border-white/20 border-t-white"
+            aria-hidden="true"
+          />
           Generating…
         </div>
       )}
       {error && !generating && (
-        <div className={`${styles.overlay} ${styles.error}`}>
+        <div className={`${overlay} bg-zinc-900/85 text-red-400`}>
           Error: {error}
         </div>
       )}
