@@ -134,7 +134,7 @@ npm run dev
 
 ## Deployment
 
-Push to `main`. GitHub Actions (`.github/workflows/deploy.yml`) builds and deploys to GitHub Pages automatically. The `base` path (`/gridfinity-expanded/`) is applied only when `CI=true`.
+Push to `main`. GitHub Actions (`.github/workflows/deploy.yml`) builds and deploys to GitHub Pages automatically. Served from the custom domain `gridfinityexpanded.ashtonsouth.me` (root path, not a GitHub Pages project-page subpath) — `public/CNAME` pins the domain and Vite's `base` is always `/`. If Pages is ever pointed back at a project-page subpath instead of a custom domain, `base` needs to change accordingly.
 
 ## Known limitations (MVP)
 
