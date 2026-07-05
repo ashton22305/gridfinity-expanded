@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button, ColorSwatch, Group, NumberInput, Stack, Text } from '@mantine/core';
 import { cellKey } from '../../../lib/edges';
 import { GRID_PITCH } from '../../../lib/geometry/gridfinity';
 import { getGridFootprintCells } from '../../../lib/printers';
@@ -6,13 +7,15 @@ import { groupBins } from '../../../lib/split';
 import { MAX_GRID, minGridSize, useAppStore } from '../../../store';
 import { binColor } from '../binColors';
 import { Hint, Label } from '../../ui/Field';
-import { NumberInput } from '../../ui/inputs';
 
 /** Grid gap in px: tighter as the cell count grows so large grids stay legible. */
 function cellGap(cols: number, rows: number): number {
   if (cols > 14 || rows > 14) return 1;
   return cols > 8 ? 2 : 4;
 }
+
+/** Shared width for the compact grid-size number fields. */
+const GRID_SIZE_INPUT_WIDTH = 64;
 
 export function ShapeTab() {
   const { config, updateConfig, gridCols, gridRows, setGridSize } = useAppStore();
@@ -70,62 +73,61 @@ export function ShapeTab() {
   const min = minGridSize(cells);  // setGridSize clamps; this only feeds the input min attrs
 
   return (
-    <div
-      className="flex flex-col gap-3 select-none"
+    <Stack
+      className="no-select"
+      gap="sm"
       onPointerUp={() => setPaintMode(null)}
       onPointerLeave={() => setPaintMode(null)}
     >
-      <div className="flex items-center gap-1.5">
+      <Group gap="xs">
         <Label>Grid</Label>
         <NumberInput
+          w={GRID_SIZE_INPUT_WIDTH}
+          hideControls
           min={min.cols}
           max={MAX_GRID}
           value={gridCols}
-          onChange={(e) => setGridSize(Number(e.target.value), gridRows)}
-          className="w-[52px] px-1.5 py-1 text-[0.8rem]"
+          onChange={(v) => setGridSize(Number(v), gridRows)}
           aria-label="Grid columns"
         />
-        <span className="text-[0.8rem] text-zinc-500">×</span>
+        <Text span>×</Text>
         <NumberInput
+          w={GRID_SIZE_INPUT_WIDTH}
+          hideControls
           min={min.rows}
           max={MAX_GRID}
           value={gridRows}
-          onChange={(e) => setGridSize(gridCols, Number(e.target.value))}
-          className="w-[52px] px-1.5 py-1 text-[0.8rem]"
+          onChange={(v) => setGridSize(gridCols, Number(v))}
           aria-label="Grid rows"
         />
-        <span className="text-[0.8rem] text-zinc-500">cells</span>
-      </div>
+        <Text span>cells</Text>
+      </Group>
 
-      <div className="flex flex-wrap gap-1.5">
+      <Group gap="xs">
         {paletteIds.map((id) => {
           const active = activeBin === id;
           return (
-            <button
+            <Button
               key={id}
-              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${
-                active ? 'text-white' : 'text-zinc-400 hover:bg-zinc-700'
-              } border-zinc-700 bg-zinc-800`}
-              style={active ? { borderColor: binColor(id) } : undefined}
+              size="xs"
+              variant="default"
               onClick={() => setActiveBin(id)}
+              style={active ? { borderColor: binColor(id) } : undefined}
+              leftSection={<ColorSwatch color={binColor(id)} size={10} withShadow={false} />}
               title={usedIds.includes(id) ? `Paint bin ${id + 1}` : 'Start a new bin'}
             >
-              <i
-                className="inline-block size-2.5 rounded-[3px]"
-                style={{ background: binColor(id) }}
-              />
               {usedIds.includes(id) ? `Bin ${id + 1}` : '+ New'}
-            </button>
+            </Button>
           );
         })}
-      </div>
+      </Group>
 
       <Hint>
         Click or drag to toggle cells for the selected bin. Adjacent bins are
         printed as separate, complete bins.
       </Hint>
       <div
-        className="grid w-full touch-none"
+        className="cell-grid"
         style={{
           gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
           aspectRatio: `${gridCols} / ${gridRows}`,
@@ -142,11 +144,7 @@ export function ShapeTab() {
               <button
                 key={`${col}-${row}`}
                 data-cell data-x={col} data-y={row}
-                className={`aspect-square min-h-0 min-w-0 rounded-[2px] border transition-colors ${
-                  isSelected
-                    ? 'hover:brightness-120'
-                    : 'border-zinc-700 bg-zinc-800 hover:border-zinc-500 hover:bg-zinc-700'
-                }`}
+                className={isSelected ? 'cell is-on' : 'cell'}
                 style={isSelected ? { background: binColor(bin), borderColor: binColor(bin) } : undefined}
                 aria-label={`Cell ${col},${row}`}
                 aria-pressed={isSelected}
@@ -155,17 +153,17 @@ export function ShapeTab() {
           })
         )}
       </div>
-      <div className="flex flex-col gap-0.5 text-[0.8rem] text-zinc-500">
-        <span>
+      <Stack gap={2}>
+        <Text>
           {cells.length} cell{cells.length !== 1 ? 's' : ''}
           {bins.length > 1 ? ` in ${bins.length} bins` : ''}
-        </span>
+        </Text>
         {cells.length > 0 && (
-          <span>
+          <Text>
             {widthCells * GRID_PITCH} × {depthCells * GRID_PITCH} mm footprint
-          </span>
+          </Text>
         )}
-      </div>
-    </div>
+      </Stack>
+    </Stack>
   );
 }

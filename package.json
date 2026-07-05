@@ -16,11 +16,11 @@
     "@jscad/3mf-serializer": "^2.1.17",
     "@jscad/modeling": "^2.13.0",
     "@jscad/stl-serializer": "^2.1.23",
-    "@tailwindcss/vite": "^4.3.2",
+    "@mantine/core": "^9.4.1",
+    "@mantine/hooks": "^9.4.1",
     "manifold-3d": "^3.5.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "tailwindcss": "^4.3.2",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
@@ -30,6 +30,9 @@
     "@vitejs/plugin-react": "^4.7.0",
     "esbuild": "^0.25.12",
     "oxlint": "^1.71.0",
+    "postcss": "^8.5.16",
+    "postcss-preset-mantine": "^1.18.0",
+    "postcss-simple-vars": "^7.0.1",
     "typescript": "~6.0.2",
     "vite": "^6.4.3"
   }
