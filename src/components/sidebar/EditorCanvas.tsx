@@ -2,6 +2,7 @@ import { useMemo, type ComponentProps } from 'react';
 import type { GridCell } from '../../lib/types';
 import { binColor } from './binColors';
 import { CELL, PAD } from './editorCoords';
+import './editor.css';
 
 interface EditorCanvasProps extends ComponentProps<'svg'> {
   gridCols: number;
@@ -25,7 +26,7 @@ export function EditorCanvas({ gridCols, gridRows, cells, children, ...svgProps 
         Array.from({ length: gridCols }, (_, col) => (
           <rect
             key={`bg${col},${row}`}
-            className="fill-zinc-800/70"
+            className="editor-cell-bg"
             x={PAD + col * CELL + 2}
             y={PAD + row * CELL + 2}
             width={CELL - 4}
@@ -56,7 +57,7 @@ export function EditorCanvas({ gridCols, gridRows, cells, children, ...svgProps 
   return (
     <svg
       viewBox={`0 0 ${viewW} ${viewH}`}
-      className="w-full touch-none"
+      className="editor-svg"
       style={{ aspectRatio: `${viewW} / ${viewH}` }}
       {...svgProps}
     >

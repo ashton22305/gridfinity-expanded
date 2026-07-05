@@ -1,3 +1,4 @@
+import { Text } from '@mantine/core';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { BabylonViewer } from './components/viewer/BabylonViewer';
 import { ExportMenu } from './components/ExportMenu';
@@ -9,16 +10,16 @@ export default function App() {
   const { previewBuffer, pieces, generating, error } = useBinGeometry(config);
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-zinc-800 px-4">
-        <span className="text-[0.9rem] font-semibold tracking-wide text-zinc-300">
+    <div className="app">
+      <header className="app-header">
+        <Text size="sm" fw={600} c="bright" lts="0.02em">
           gridfinity-expanded
-        </span>
+        </Text>
         <ExportMenu pieces={pieces} generating={generating} />
       </header>
-      <div className="flex flex-1 overflow-hidden">
+      <div className="app-body">
         <Sidebar />
-        <main className="flex-1 overflow-hidden">
+        <main className="app-main">
           <BabylonViewer stlBuffer={previewBuffer} generating={generating} error={error} />
         </main>
       </div>

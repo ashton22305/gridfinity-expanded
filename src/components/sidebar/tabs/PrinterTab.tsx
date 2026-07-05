@@ -1,7 +1,7 @@
+import { NumberInput, Paper, Select, Stack } from '@mantine/core';
 import { PRINTER_PROFILES, checkBedFit } from '../../../lib/printers';
 import { useAppStore } from '../../../store';
-import { Field, Hint } from '../../ui/Field';
-import { NumberInput, Select } from '../../ui/inputs';
+import { Hint } from '../../ui/Field';
 import { StatusBanner } from '../../ui/StatusBanner';
 
 export function PrinterTab() {
@@ -10,40 +10,34 @@ export function PrinterTab() {
   const isCustom = printer.name === 'Custom';
   const bedFit = checkBedFit(cells, printer);
 
-  function handlePresetChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    const found = PRINTER_PROFILES.find((p) => p.name === e.target.value);
-    if (found) setPrinter(found);
-  }
-
   return (
-    <div className="flex flex-col gap-4">
-      <Field label="Printer">
-        <Select className="w-full px-2 py-1.5 text-[0.85rem]" value={printer.name} onChange={handlePresetChange}>
-          {PRINTER_PROFILES.map((p) => (
-            <option key={p.name} value={p.name}>
-              {p.name}
-            </option>
-          ))}
-        </Select>
-      </Field>
+    <Stack gap="md">
+      <Select
+        label="Printer"
+        data={PRINTER_PROFILES.map((p) => p.name)}
+        value={printer.name}
+        onChange={(name) => {
+          const found = PRINTER_PROFILES.find((p) => p.name === name);
+          if (found) setPrinter(found);
+        }}
+      />
 
       {isCustom && (
-        <div className="flex flex-col gap-3 rounded-md bg-zinc-800/50 p-3">
-          {([['bedWidth', 'Bed width'], ['bedDepth', 'Bed depth']] as const).map(([dim, label]) => (
-            <Field key={dim} label={label}>
-              <div className="flex items-center gap-2">
-                <NumberInput
-                  min={50}
-                  max={1000}
-                  value={printer[dim]}
-                  onChange={(e) => setPrinter({ ...printer, [dim]: Number(e.target.value) })}
-                  className="w-20 px-2 py-1"
-                />
-                <span className="text-[0.85rem] text-zinc-500">mm</span>
-              </div>
-            </Field>
-          ))}
-        </div>
+        <Paper p="sm" bg="dark.6">
+          <Stack gap="sm">
+            {([['bedWidth', 'Bed width'], ['bedDepth', 'Bed depth']] as const).map(([dim, label]) => (
+              <NumberInput
+                key={dim}
+                label={label}
+                min={50}
+                max={1000}
+                suffix=" mm"
+                value={printer[dim]}
+                onChange={(value) => setPrinter({ ...printer, [dim]: Number(value) })}
+              />
+            ))}
+          </Stack>
+        </Paper>
       )}
 
       {cells.length === 0 ? (
@@ -56,6 +50,6 @@ export function PrinterTab() {
                the ${printer.name} bed (${printer.bedWidth} × ${printer.bedDepth} mm).`}
         </StatusBanner>
       )}
-    </div>
+    </Stack>
   );
 }

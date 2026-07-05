@@ -1,3 +1,4 @@
+import { ColorSwatch, Select, Stack } from '@mantine/core';
 import type { BinSlope, SlopeDir } from '../../../lib/types';
 import { BASE_TOTAL_HEIGHT, HEIGHT_PER_UNIT } from '../../../lib/geometry/gridfinity';
 import { groupBins } from '../../../lib/split';
@@ -5,7 +6,13 @@ import { useAppStore } from '../../../store';
 import { binColor } from '../binColors';
 import { Hint } from '../../ui/Field';
 import { SliderField } from '../../ui/SliderField';
-import { Select } from '../../ui/inputs';
+
+const SLOPE_DIRS: { value: SlopeDir; label: string }[] = [
+  { value: '-y', label: 'Low at top edge (as drawn in Shape)' },
+  { value: '+y', label: 'Low at bottom edge' },
+  { value: '-x', label: 'Low at left edge' },
+  { value: '+x', label: 'Low at right edge' },
+];
 
 export function DimensionsTab() {
   const { config, updateConfig } = useAppStore();
@@ -26,7 +33,7 @@ export function DimensionsTab() {
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <Stack gap="lg">
       <SliderField
         label="Height"
         min={1} max={20} step={1}
@@ -78,9 +85,12 @@ export function DimensionsTab() {
                 {bins.length > 1 && (
                   <>
                     {' — '}
-                    <i
-                      className="inline-block size-[9px] rounded-[3px] align-baseline"
-                      style={{ background: binColor(id) }}
+                    <ColorSwatch
+                      component="span"
+                      color={binColor(id)}
+                      size={10}
+                      withShadow={false}
+                      style={{ verticalAlign: 'text-bottom' }}
                     />
                     {` Bin ${id + 1}`}
                   </>
@@ -95,16 +105,11 @@ export function DimensionsTab() {
           >
             {slope.angle > 0 && (
               <Select
-                className="w-full px-2 py-1.5 text-[0.85rem]"
+                data={SLOPE_DIRS}
                 value={slope.dir}
-                onChange={(e) => setSlope(id, { dir: e.target.value as SlopeDir })}
+                onChange={(v) => v && setSlope(id, { dir: v as SlopeDir })}
                 aria-label={`Low side of the sloped base for bin ${id + 1}`}
-              >
-                <option value="-y">Low at top edge (as drawn in Shape)</option>
-                <option value="+y">Low at bottom edge</option>
-                <option value="-x">Low at left edge</option>
-                <option value="+x">Low at right edge</option>
-              </Select>
+              />
             )}
           </SliderField>
         );
@@ -113,6 +118,6 @@ export function DimensionsTab() {
         Tilts a bin's cavity floor so contents slide to one side. Walls and the
         Gridfinity base stay standard.
       </Hint>
-    </div>
+    </Stack>
   );
 }

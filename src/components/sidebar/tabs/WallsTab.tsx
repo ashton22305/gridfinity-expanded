@@ -1,4 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
+import {
+  Button, Checkbox, CloseButton, Group, NumberInput, Paper, Stack, Text,
+} from '@mantine/core';
 import type { GridEdge, InnerWall } from '../../../lib/types';
 import {
   edgeKey, perimeterEdges, internalEdges, toggleEdge,
@@ -9,8 +12,6 @@ import { useAppStore } from '../../../store';
 import { EditorCanvas } from '../EditorCanvas';
 import { CELL, gridToSvg, mmToSvg, pointerToMm } from '../editorCoords';
 import { Hint, Label } from '../../ui/Field';
-import { Button } from '../../ui/Button';
-import { NumberInput } from '../../ui/inputs';
 
 const snapMm = (mm: number) => Math.round(mm * 2) / 2;
 
@@ -53,11 +54,14 @@ function edgeEndpoints(e: GridEdge): { x1: number; y1: number; x2: number; y2: n
 
 interface Draft { x1: number; y1: number; x2: number; y2: number }
 
+/** Shared width for the compact wall width/height number fields. */
+const WALL_DIMENSION_INPUT_WIDTH = 56;
+
 const LEGEND = [
-  { label: 'wall', swatch: 'bg-slate-400' },
-  { label: 'open', swatch: 'bg-[repeating-linear-gradient(90deg,#52525b_0_3px,transparent_3px_6px)]' },
-  { label: 'divider', swatch: 'bg-blue-600' },
-  { label: 'custom', swatch: 'bg-teal-500' },
+  { label: 'wall', kind: 'wall' },
+  { label: 'open', kind: 'open' },
+  { label: 'divider', kind: 'divider' },
+  { label: 'custom', kind: 'custom' },
 ];
 
 export function WallsTab() {
@@ -92,15 +96,15 @@ export function WallsTab() {
         edges: [...perimeter.values()],
         activeSet: new Set(openEdges.map(edgeKey)),
         toggle: (e: GridEdge) => updateConfig({ openEdges: toggleEdge(openEdges, e) }),
-        activeClass: 'stroke-zinc-600 [stroke-width:2] [stroke-dasharray:4_5] group-hover:stroke-zinc-500',  // open
-        inactiveClass: 'stroke-slate-400 [stroke-width:4] group-hover:stroke-slate-300',                     // solid wall
+        activeClass: 'edge-line edge-line--open',   // wall removed
+        inactiveClass: 'edge-line edge-line--wall', // solid wall
       },
       {
         edges: [...internal.values()],
         activeSet: new Set(dividerEdges.map(edgeKey)),
         toggle: (e: GridEdge) => updateConfig({ dividerEdges: toggleEdge(dividerEdges, e) }),
-        activeClass: 'stroke-blue-600 [stroke-width:4] group-hover:stroke-blue-500',  // divider
-        inactiveClass: 'stroke-zinc-700 [stroke-width:1.5] [stroke-dasharray:2_4] group-hover:stroke-blue-600 group-hover:[stroke-width:3]',  // ghost
+        activeClass: 'edge-line edge-line--divider', // divider
+        inactiveClass: 'edge-line edge-line--ghost', // ghost
       },
     ];
     return layers.flatMap(({ edges, activeSet, toggle, activeClass, inactiveClass }) =>
@@ -108,13 +112,9 @@ export function WallsTab() {
         const key = edgeKey(e);
         const p = edgeEndpoints(e);
         return (
-          <g key={key} className="group cursor-pointer" onClick={() => toggle(e)}>
+          <g key={key} className="edge" onClick={() => toggle(e)}>
             <line {...p} stroke="transparent" strokeWidth={12} strokeLinecap="round" />
-            <line
-              {...p}
-              className={`pointer-events-none ${activeSet.has(key) ? activeClass : inactiveClass}`}
-              strokeLinecap="round"
-            />
+            <line {...p} className={activeSet.has(key) ? activeClass : inactiveClass} />
           </g>
         );
       }),
@@ -163,7 +163,7 @@ export function WallsTab() {
   }
 
   return (
-    <div className="flex flex-col gap-3 select-none">
+    <Stack className="no-select" gap="sm">
       <Hint>
         Click outer edges to remove/restore walls, inner edges to add grid
         dividers. Drag inside a bin to draw a custom wall at any angle —
@@ -187,105 +187,101 @@ export function WallsTab() {
         {innerWalls.map((w, i) => (
           <line
             key={`w${i}`}
-            className="pointer-events-none stroke-teal-500"
+            className="custom-wall"
             x1={mmToSvg(w.x1)} y1={mmToSvg(w.y1)}
             x2={mmToSvg(w.x2)} y2={mmToSvg(w.y2)}
             strokeWidth={Math.max(2.5, (w.width / GRID_PITCH) * CELL)}
-            strokeLinecap="round"
           />
         ))}
         {draft && (
           <line
-            className="pointer-events-none stroke-teal-400"
+            className="custom-wall--draft"
             x1={mmToSvg(draft.x1)} y1={mmToSvg(draft.y1)}
             x2={mmToSvg(draft.x2)} y2={mmToSvg(draft.y2)}
-            strokeWidth={3} strokeDasharray="5 4" strokeLinecap="round"
           />
         )}
       </EditorCanvas>
-      <div className="flex flex-wrap items-center gap-3.5 text-xs text-zinc-500">
-        {LEGEND.map(({ label, swatch }) => (
-          <span key={label} className="inline-flex items-center gap-1">
-            <i className={`inline-block h-[3px] w-4 rounded-sm ${swatch}`} /> {label}
-          </span>
+      <Group gap="md">
+        {LEGEND.map(({ label, kind }) => (
+          <Group key={label} gap={4} wrap="nowrap">
+            <span className={`legend-swatch legend-swatch--${kind}`} />
+            <Text>{label}</Text>
+          </Group>
         ))}
-      </div>
-      <Button
-        className="self-start px-3 py-1 text-[0.8rem]"
-        disabled={!hasOverrides}
-        onClick={() => updateConfig({ openEdges: [], dividerEdges: [] })}
-      >
-        Reset grid walls
-      </Button>
+      </Group>
+      <Group>
+        <Button
+          variant="default"
+          disabled={!hasOverrides}
+          onClick={() => updateConfig({ openEdges: [], dividerEdges: [] })}
+        >
+          Reset grid walls
+        </Button>
+      </Group>
 
       {innerWalls.length > 0 && (
-        <div className="flex flex-col gap-1.5">
+        <Stack gap="xs">
           <Label>Custom walls</Label>
           {innerWalls.map((w, i) => {
             const length = Math.hypot(w.x2 - w.x1, w.y2 - w.y1);
             const full = w.height == null;
             return (
-              <div
-                key={i}
-                className="flex items-center gap-2 rounded-md bg-zinc-800/70 px-2 py-1 text-xs text-zinc-400"
-              >
-                <span className="flex-1 text-zinc-300">#{i + 1} · {length.toFixed(0)} mm</span>
-                <label className="inline-flex items-center gap-1">
-                  w
-                  <NumberInput
-                    min={0.4}
-                    max={8}
-                    step={0.2}
-                    value={w.width}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value);
-                      if (!isNaN(v)) updateWall(i, { width: v });
-                    }}
-                    className="w-[46px] px-1 py-0.5 text-xs"
-                  />
-                </label>
-                <label className="inline-flex items-center gap-1">
-                  h
-                  <NumberInput
-                    min={0.5}
-                    max={Math.round(cavityDepth * 2) / 2}
-                    step={0.5}
-                    value={full ? '' : w.height ?? ''}
-                    placeholder="full"
-                    disabled={full}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value);
-                      if (!isNaN(v)) updateWall(i, { height: v });
-                    }}
-                    className="w-[46px] px-1 py-0.5 text-xs"
-                  />
-                </label>
-                <label className="inline-flex cursor-pointer items-center gap-1">
-                  <input
-                    type="checkbox"
+              <Paper key={i} p={6} bg="dark.6">
+                <Group gap="xs" wrap="nowrap">
+                  <Text flex={1} c="bright">#{i + 1} · {length.toFixed(0)} mm</Text>
+                  <Group gap={4} wrap="nowrap">
+                    <Text>w</Text>
+                    <NumberInput
+                      w={WALL_DIMENSION_INPUT_WIDTH}
+                      hideControls
+                      min={0.4}
+                      max={8}
+                      step={0.2}
+                      value={w.width}
+                      onChange={(v) => {
+                        const n = typeof v === 'number' ? v : parseFloat(v);
+                        if (!isNaN(n)) updateWall(i, { width: n });
+                      }}
+                    />
+                  </Group>
+                  <Group gap={4} wrap="nowrap">
+                    <Text>h</Text>
+                    <NumberInput
+                      w={WALL_DIMENSION_INPUT_WIDTH}
+                      hideControls
+                      min={0.5}
+                      max={Math.round(cavityDepth * 2) / 2}
+                      step={0.5}
+                      value={full ? '' : w.height ?? ''}
+                      placeholder="full"
+                      disabled={full}
+                      onChange={(v) => {
+                        const n = typeof v === 'number' ? v : parseFloat(v);
+                        if (!isNaN(n)) updateWall(i, { height: n });
+                      }}
+                    />
+                  </Group>
+                  <Checkbox
+                    label="full"
                     checked={full}
                     onChange={(e) => updateWall(i, {
-                      height: e.target.checked ? null : Math.round(cavityDepth) / 2,
+                      height: e.currentTarget.checked ? null : Math.round(cavityDepth) / 2,
                     })}
                   />
-                  full
-                </label>
-                <button
-                  className="rounded px-1.5 text-[0.95rem] text-red-400 hover:bg-red-950/60"
-                  onClick={() => removeWall(i)}
-                  aria-label={`Delete wall ${i + 1}`}
-                >
-                  ×
-                </button>
-              </div>
+                  <CloseButton
+                    onClick={() => removeWall(i)}
+                    aria-label={`Delete wall ${i + 1}`}
+                  />
+                </Group>
+              </Paper>
             );
           })}
           <Hint>
             Lower walls ramp smoothly into taller walls they touch. Widths and
             heights are in mm; height is measured from the cavity floor.
           </Hint>
-        </div>
+        </Stack>
       )}
-    </div>
+    </Stack>
   );
 }

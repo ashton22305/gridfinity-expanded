@@ -1,3 +1,4 @@
+import { SegmentedControl, Stack } from '@mantine/core';
 import type { SplitLine } from '../../../lib/types';
 import { checkPieceFit } from '../../../lib/printers';
 import { lineKey, toggleSplitLine } from '../../../lib/split';
@@ -5,7 +6,6 @@ import { useAppStore } from '../../../store';
 import { EditorCanvas } from '../EditorCanvas';
 import { gridToSvg } from '../editorCoords';
 import { Hint } from '../../ui/Field';
-import { Button } from '../../ui/Button';
 import { StatusBanner } from '../../ui/StatusBanner';
 
 export function SplitTab() {
@@ -49,19 +49,17 @@ export function SplitTab() {
   }
 
   return (
-    <div className="flex flex-col gap-3 select-none">
-      <div className="flex gap-1.5" role="radiogroup" aria-label="Split mode">
-        {(['auto', 'manual'] as const).map((mode) => (
-          <Button
-            key={mode}
-            variant={splitMode === mode ? 'primary' : 'secondary'}
-            className="flex-1 py-1.5 text-[0.8rem]"
-            onClick={() => updateConfig({ splitMode: mode })}
-          >
-            {mode === 'auto' ? 'Auto (fit bed)' : 'Manual'}
-          </Button>
-        ))}
-      </div>
+    <Stack className="no-select" gap="sm">
+      <SegmentedControl
+        fullWidth
+        aria-label="Split mode"
+        value={splitMode}
+        onChange={(value) => updateConfig({ splitMode: value as 'auto' | 'manual' })}
+        data={[
+          { label: 'Auto (fit bed)', value: 'auto' },
+          { label: 'Manual', value: 'manual' },
+        ]}
+      />
 
       <Hint>
         {isManual
@@ -76,25 +74,18 @@ export function SplitTab() {
           return (
             <g
               key={lineKey(l)}
-              className={isManual ? 'group cursor-pointer' : 'cursor-default'}
+              className={isManual ? 'split-line' : 'split-line is-static'}
               onClick={isManual
                 ? () => updateConfig({ splitLines: toggleSplitLine(splitLines, l) })
                 : undefined}
             >
-              <line {...p} stroke="transparent" strokeWidth={12} strokeLinecap="round" />
-              {active ? (
-                <line
-                  {...p}
-                  className="pointer-events-none stroke-amber-500 group-hover:stroke-amber-400"
-                  strokeWidth={3} strokeDasharray="7 4" strokeLinecap="round"
-                />
-              ) : (
-                <line
-                  {...p}
-                  className="pointer-events-none stroke-zinc-600 [stroke-width:1] group-hover:stroke-amber-500 group-hover:[stroke-width:2]"
-                  strokeDasharray="2 5" strokeLinecap="round"
-                />
-              )}
+              <line {...p} className="split-line-hit" />
+              <line
+                {...p}
+                className={`split-line-visible ${
+                  active ? 'split-line-visible--active' : 'split-line-visible--inactive'
+                }`}
+              />
             </g>
           );
         })}
@@ -109,6 +100,6 @@ export function SplitTab() {
           Pieces keep their base pegs and sit on the baseplate like separate bins.
         </Hint>
       )}
-    </div>
+    </Stack>
   );
 }

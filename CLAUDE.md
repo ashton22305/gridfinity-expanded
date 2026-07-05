@@ -12,7 +12,7 @@ Browser-based Gridfinity bin generator. Supports non-rectangular (tetris-piece) 
 | Geometry (booleans) | `manifold-3d` (WASM) | Guaranteed watertight, 2-manifold output — JSCAD's mesh booleans leave non-manifold T-junctions and its `offset()` self-intersects on thick walls |
 | 3D preview | Babylon.js | Microsoft-maintained; TypeScript-first |
 | Bundler | Vite 6 (rollup) | Vite 8 rolldown OOMs on large @jscad bundles |
-| Styling | Tailwind CSS 4 (`@tailwindcss/vite`) | utility classes + shared primitives in `components/ui/`; zinc palette, blue-600 accent |
+| Styling | Mantine 9 (`@mantine/core` + PostCSS) | themed component library: all control styling centralized in `src/theme.ts`; no utility classes / inline style config in JSX. Dark scheme forced |
 | Deploy | GitHub Actions → GitHub Pages | `.github/workflows/deploy.yml` |
 
 ## Project layout
@@ -38,8 +38,10 @@ src/
   hooks/
     useBinGeometry.ts     debounces config changes, drives worker; exposes previewBuffer + pieces
   components/
-    ui/                   shared Tailwind primitives: Field/Label/Hint, SliderField,
-                          NumberInput/Select, Switch, StatusBanner
+    ui/                   thin app-specific compositions over Mantine (styling
+                          decided once): Field/Label/Hint, SliderField, StatusBanner.
+                          Plain controls (Button, Select, NumberInput, Switch, Tabs,
+                          Menu, Alert) are used from @mantine/core directly
     sidebar/
       Sidebar.tsx         tabbed left panel (tab name → component map)
       binColors.ts        bin-id → color palette for the editors
@@ -121,7 +123,7 @@ Geometry semantics worth knowing:
 - **New tab** → add to the `TABS` map in `Sidebar.tsx`, create `src/components/sidebar/tabs/MyTab.tsx` (no props — read `useAppStore()`).
 - **New export format** → add serializer in `lib/export/`, add option to `ExportMenu.tsx`.
 - **Manifold correctness** → after any geometry change, run `npm run check:manifold`. It builds every config in the test matrix and asserts the exported STL is watertight and 2-manifold (no boundary/non-manifold edges, degenerate or duplicate faces). Combine solids with manifold booleans and do inward 2D offsets with `CrossSection.offset` (never JSCAD `offset()` for large inward deltas — it self-intersects). Feed the manifold engine only individually-closed primitives. Never stack extrusions **flush** unless both sides of the junction land on the bit-identical coordinate (e.g. an exactly-representable constant like `PEG_HEIGHT = 4.75`): z-values built from differing float expressions (`floorZ + i*stepH` vs `(floorZ + (i-1)*stepH) + stepH`) miss by an ULP, and the boolean keeps the sub-nanometre gap — subtracting such a stack leaves zero-thickness membranes that z-fight in slicer viewports. Instead overlap each solid by `CSG_EPSILON` into a neighbor whose cross-section contains its own, so the overshoot is swallowed inside the larger solid.
-- **Theming** → Tailwind CSS 4 everywhere (no CSS Modules). Global base styles live in `src/index.css`; reusable control styling lives in `src/components/ui/` — extend those primitives rather than repeating utility strings. shadcn/ui drops in cleanly if needed later.
+- **Theming** → Mantine, theme-first. Change how controls look in **`src/theme.ts`** (per-component `defaultProps` in one `createTheme`) — never by adding className/inline style in JSX. Use Mantine components + layout primitives (`Stack`/`Group`/`Text`); size/color come from the theme. The only hand-written CSS is `src/index.css` (full-viewport layout scaffolding) and `src/components/sidebar/editor.css` (the bespoke SVG grid editors, which a component library can't express) — both keyed by class and pulling colors from Mantine CSS variables (`var(--mantine-color-*)`). Genuinely data-driven values (a cell's bin color, a wall's pixel thickness) stay inline; design constants never do.
 
 ## Local dev
 

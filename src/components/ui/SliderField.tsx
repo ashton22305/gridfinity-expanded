@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { Group, Slider, Text } from '@mantine/core';
+import { useId } from '@mantine/hooks';
 import { Field } from './Field';
 
 interface SliderFieldProps {
@@ -21,23 +23,30 @@ interface SliderFieldProps {
 export function SliderField({
   label, min, max, step, value, onChange, display, unit, hint, children,
 }: SliderFieldProps) {
+  const id = useId();
   return (
-    <Field label={label} hint={hint}>
-      <div className="flex items-center gap-2.5">
-        <input
-          type="range"
+    <Field id={id} label={label} hint={hint}>
+      <Group gap="sm" wrap="nowrap">
+        <Slider
+          id={id}
+          flex={1}
           min={min}
           max={max}
           step={step}
           value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
-          className="flex-1 cursor-pointer accent-blue-600"
+          onChange={onChange}
+          label={null}
         />
-        <span className="min-w-[90px] text-sm text-zinc-200">
+        <Text size="sm" c="bright" miw="5.5rem">
           {display}
-          {unit && <span className="text-xs text-zinc-500"> {unit}</span>}
-        </span>
-      </div>
+          {unit && (
+            <Text span>
+              {' '}
+              {unit}
+            </Text>
+          )}
+        </Text>
+      </Group>
       {children}
     </Field>
   );

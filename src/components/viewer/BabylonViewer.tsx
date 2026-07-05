@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Loader, Text } from '@mantine/core';
 import {
   Engine,
   Scene,
@@ -108,24 +109,18 @@ export function BabylonViewer({ stlBuffer, generating, error }: Props) {
       });
   }, [stlBuffer]);
 
-  const overlay =
-    'pointer-events-none absolute inset-0 flex items-center justify-center gap-2.5 text-[0.9rem]';
-
   return (
-    <div className="relative size-full overflow-hidden bg-zinc-900">
-      <canvas ref={canvasRef} className="block size-full outline-none" />
+    <div className="viewer">
+      <canvas ref={canvasRef} className="viewer-canvas" />
       {generating && (
-        <div className={`${overlay} bg-zinc-900/70 text-zinc-300`}>
-          <span
-            className="inline-block size-[18px] animate-spin rounded-full border-2 border-white/20 border-t-white"
-            aria-hidden="true"
-          />
-          Generating…
+        <div className="viewer-overlay viewer-overlay--busy">
+          <Loader size="sm" />
+          <Text size="sm" c="bright">Generating…</Text>
         </div>
       )}
       {error && !generating && (
-        <div className={`${overlay} bg-zinc-900/85 text-red-400`}>
-          Error: {error}
+        <div className="viewer-overlay viewer-overlay--error">
+          <Text size="sm" c="red">Error: {error}</Text>
         </div>
       )}
     </div>
