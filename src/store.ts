@@ -24,8 +24,8 @@ const DEFAULT_CONFIG: BinConfig = {
   heightUnits: 3,
   wallThickness: 1.2,
   cavityCornerRadius: 2.5, // ≈ the interior look of the spec 3.75 mm outer corner minus one wall
-  innerFilletRadius: 0.5,
-  magnetHoles: true,
+  innerFilletRadius: 3.0,
+  magnetHoles: false,
   screwHoles: false,
   openEdges: [],
   dividerEdges: [],
@@ -68,8 +68,8 @@ interface AppState {
 export const useAppStore = create<AppState>((set) => ({
   config: withAutoSplit(DEFAULT_CONFIG, DEFAULT_PRINTER),
   printer: DEFAULT_PRINTER,
-  gridCols: 16,
-  gridRows: 12,
+  gridCols: 6,
+  gridRows: 6,
 
   updateConfig: (patch) =>
     set((s) => ({ config: withAutoSplit({ ...s.config, ...patch }, s.printer) })),
@@ -79,7 +79,6 @@ export const useAppStore = create<AppState>((set) => ({
 
   setGridSize: (cols, rows) =>
     set((s) => {
-      if (!Number.isFinite(cols) || !Number.isFinite(rows)) return {};
       const min = minGridSize(s.config.cells);
       return {
         gridCols: Math.min(MAX_GRID, Math.max(min.cols, Math.round(cols))),
