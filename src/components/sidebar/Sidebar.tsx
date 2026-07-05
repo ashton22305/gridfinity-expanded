@@ -26,7 +26,7 @@ export function Sidebar() {
     <Tabs
       value={activeTab}
       onChange={(value) => value && setActiveTab(value as Tab)}
-      className="app-sidebar"
+      className="sidebar-tabs"
     >
       <Tabs.List grow>
         {(Object.keys(TABS) as Tab[]).map((tab) => (

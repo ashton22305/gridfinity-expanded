@@ -1,10 +1,10 @@
 /*
- * Global resets + app-level layout scaffolding only.
- *
- * All control styling lives in the Mantine theme (src/theme.ts). This file
- * holds just the handful of full-viewport structural containers that a
- * component library doesn't own — and even these pull their colors/spacing
- * from Mantine's CSS variables, so the theme stays the single source of truth.
+ * Global resets + the handful of structural details a component library
+ * can't express, because they aren't a component: sizing the html/body/#root
+ * chain, and establishing the positioning/clipping context the absolutely-
+ * positioned Babylon canvas needs inside AppShell.Main. Header/navbar chrome
+ * (flex layout, border, background) is owned by Mantine's AppShell (see
+ * App.tsx) — styling it here would fight the component that already does it.
  */
 html,
 body,
@@ -14,44 +14,16 @@ body,
   overflow: hidden;
 }
 
-.app {
-  display: flex;
-  flex-direction: column;
-  height: 100dvh;
-  overflow: hidden;
-}
-
-.app-header {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: space-between;
-  height: 48px;
-  padding: 0 var(--mantine-spacing-md);
-  border-bottom: 1px solid var(--mantine-color-dark-4);
-}
-
-.app-body {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.app-sidebar {
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-  width: 288px;
-  overflow: hidden;
-  border-right: 1px solid var(--mantine-color-dark-4);
-  background: var(--mantine-color-dark-7);
-}
-
 .app-main {
   position: relative;
-  flex: 1;
   min-width: 0;
+  overflow: hidden;
+}
+
+.sidebar-tabs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -59,7 +31,7 @@ body,
 .viewer {
   position: absolute;
   inset: 0;
-  background: var(--mantine-color-dark-7);
+  background: var(--mantine-color-body);
 }
 
 .viewer-canvas {
@@ -79,8 +51,8 @@ body,
   pointer-events: none;
 }
 .viewer-overlay--busy {
-  background: color-mix(in srgb, var(--mantine-color-dark-7) 70%, transparent);
+  background: color-mix(in srgb, var(--mantine-color-body) 70%, transparent);
 }
 .viewer-overlay--error {
-  background: color-mix(in srgb, var(--mantine-color-dark-7) 85%, transparent);
+  background: color-mix(in srgb, var(--mantine-color-body) 85%, transparent);
 }
