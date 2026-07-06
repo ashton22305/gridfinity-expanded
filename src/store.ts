@@ -4,6 +4,10 @@ import { PRINTER_PROFILES, computeAutoSplitLines } from './lib/printers';
 
 const DEFAULT_PRINTER = PRINTER_PROFILES[5]; // Prusa MK4 / MK3S+
 
+export const SIDEBAR_MIN_WIDTH = 220;
+export const SIDEBAR_MAX_WIDTH = 900;
+const DEFAULT_SIDEBAR_WIDTH = 450;
+
 /** Editor grid bounds (cells). The minimum also grows to cover the painted shape. */
 export const MAX_GRID = 40;
 
@@ -60,16 +64,20 @@ interface AppState {
   /** Editor canvas size in cells — purely a UI concern, not part of the geometry config. */
   gridCols: number;
   gridRows: number;
+  /** Sidebar width in px — purely a UI concern, not part of the geometry config. */
+  sidebarWidth: number;
   updateConfig: (patch: Partial<BinConfig>) => void;
   setPrinter: (printer: PrinterProfile) => void;
   setGridSize: (cols: number, rows: number) => void;
+  setSidebarWidth: (width: number) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
   config: withAutoSplit(DEFAULT_CONFIG, DEFAULT_PRINTER),
   printer: DEFAULT_PRINTER,
-  gridCols: 6,
-  gridRows: 6,
+  gridCols: 7,
+  gridRows: 7,
+  sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
 
   updateConfig: (patch) =>
     set((s) => ({ config: withAutoSplit({ ...s.config, ...patch }, s.printer) })),
@@ -85,4 +93,7 @@ export const useAppStore = create<AppState>((set) => ({
         gridRows: Math.min(MAX_GRID, Math.max(min.rows, Math.round(rows))),
       };
     }),
+
+  setSidebarWidth: (width) =>
+    set({ sidebarWidth: Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width))) }),
 }));

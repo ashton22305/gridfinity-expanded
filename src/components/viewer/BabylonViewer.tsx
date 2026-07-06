@@ -62,8 +62,14 @@ export function BabylonViewer({ stlBuffer, generating, error }: Props) {
     const onResize = () => engine.resize();
     window.addEventListener('resize', onResize);
 
+    // The window doesn't fire 'resize' when the sidebar drag changes the
+    // canvas's own container size, so watch the canvas directly too.
+    const resizeObserver = new ResizeObserver(onResize);
+    resizeObserver.observe(canvas);
+
     return () => {
       window.removeEventListener('resize', onResize);
+      resizeObserver.disconnect();
       engine.dispose();
     };
   }, []);
