@@ -31,10 +31,31 @@ export const theme = createTheme({
     Slider: Slider.extend({ defaultProps: { size: 'sm' } }),
     Switch: Switch.extend({ defaultProps: { size: 'md' } }),
     Tabs: Tabs.extend({
-      defaultProps: { variant: 'default', color: 'blue' },
-      // The sidebar's 6-way tab strip needs to stay compact; centralized here
-      // rather than as a per-instance px/fz override on <Tabs.Tab>.
-      styles: { tab: { padding: '0 0.25rem', fontSize: 'var(--mantine-font-size-xs)' } },
+      // 'pills' highlights the active tab with a filled background instead
+      // of the 'default' variant's underline; radius 0 keeps them rectangular.
+      defaultProps: { variant: 'pills', color: 'blue', radius: 0 },
+      // The sidebar's 6-way tab strip needs to stay compact and scroll
+      // horizontally rather than wrap; centralized here rather than as
+      // per-instance overrides on <Tabs.List>/<Tabs.Tab>.
+      styles: {
+        tab: {
+          padding: '0.75rem 0.75rem',
+          margin: '0 0',
+          fontSize: 'var(--mantine-font-size-sm)',
+          // flex-grow lets tabs stretch to fill any leftover width in the
+          // list (no gaps), while flex-shrink still lets them shrink back
+          // to content size and scroll once the sidebar gets too narrow.
+          flex: '1 1 auto',
+        },
+        // paddingBottom keeps the native horizontal scrollbar clear of the
+        // tab labels instead of overlapping them.
+        list: {
+          flexWrap: 'nowrap',
+          overflowX: 'auto',
+          gap: 0,
+          paddingBottom: '0.5rem',
+        },
+      },
     }),
     Alert: Alert.extend({ defaultProps: { variant: 'light' } }),
     Menu: Menu.extend({ defaultProps: { shadow: 'md', position: 'bottom-end' } }),

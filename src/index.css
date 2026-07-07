@@ -18,6 +18,37 @@ body,
   position: relative;
   min-width: 0;
   overflow: hidden;
+  /*
+   * Mantine only writes --app-shell-main-column-start (which keeps Main out
+   * of the navbar's grid column) inside a `navbar.breakpoint &&`-guarded
+   * media-query block — and treats breakpoint: 0 ("no responsive collapse,
+   * always docked") as falsy, so that write never happens. Main then
+   * defaults to spanning the full grid (1 / -1), overlapped by the fixed-
+   * position navbar, so the Babylon canvas silently renders full-viewport-
+   * width underneath the sidebar. Set explicitly here since the library
+   * has no code path that reaches this for a breakpoint of 0.
+   */
+  grid-column: 2 / -1;
+}
+
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 1;
+}
+
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle:active {
+  background: var(--mantine-primary-color-filled);
+}
+
+body.no-select {
+  user-select: none;
 }
 
 .sidebar-tabs {

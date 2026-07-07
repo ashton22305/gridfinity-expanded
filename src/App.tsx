@@ -1,5 +1,6 @@
 import { AppShell, Group, Text } from '@mantine/core';
 import { Sidebar } from './components/sidebar/Sidebar';
+import { SidebarResizeHandle } from './components/sidebar/SidebarResizeHandle';
 import { BabylonViewer } from './components/viewer/BabylonViewer';
 import { ExportMenu } from './components/ExportMenu';
 import { useBinGeometry } from './hooks/useBinGeometry';
@@ -7,10 +8,11 @@ import { useAppStore } from './store';
 
 export default function App() {
   const config = useAppStore((s) => s.config);
+  const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const { previewBuffer, pieces, generating, error } = useBinGeometry(config);
 
   return (
-    <AppShell mode="static" header={{ height: 48 }} navbar={{ width: 288, breakpoint: 0 }} padding={0}>
+    <AppShell mode="static" header={{ height: 48 }} navbar={{ width: sidebarWidth, breakpoint: 0 }} padding={0}>
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
           <Text size="sm" fw={600} c="bright" lts="0.02em">
@@ -21,6 +23,7 @@ export default function App() {
       </AppShell.Header>
       <AppShell.Navbar>
         <Sidebar />
+        <SidebarResizeHandle />
       </AppShell.Navbar>
       <AppShell.Main className="app-main">
         <BabylonViewer stlBuffer={previewBuffer} generating={generating} error={error} />

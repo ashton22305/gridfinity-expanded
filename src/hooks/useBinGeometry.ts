@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BinConfig } from '../lib/types';
 
-const DEBOUNCE_MS = 350;
+const DEBOUNCE_MS = 1000;
 
 export interface PieceStl {
   name: string;
