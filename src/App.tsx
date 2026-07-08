@@ -1,6 +1,7 @@
 import { AppShell, Group, Text } from '@mantine/core';
 import { Sidebar } from './components/sidebar/Sidebar';
-import { SidebarResizeHandle } from './components/sidebar/SidebarResizeHandle';
+import { SettingsPanel } from './components/sidebar/SettingsPanel';
+import { PanelResizeHandle } from './components/sidebar/PanelResizeHandle';
 import { BabylonViewer } from './components/viewer/BabylonViewer';
 import { ExportMenu } from './components/ExportMenu';
 import { useBinGeometry } from './hooks/useBinGeometry';
@@ -8,11 +9,18 @@ import { useAppStore } from './store';
 
 export default function App() {
   const config = useAppStore((s) => s.config);
-  const sidebarWidth = useAppStore((s) => s.sidebarWidth);
+  const panelWidths = useAppStore((s) => s.panelWidths);
   const { previewBuffer, pieces, generating, error } = useBinGeometry(config);
 
   return (
-    <AppShell mode="static" header={{ height: 48 }} navbar={{ width: sidebarWidth, breakpoint: 0 }} padding={0}>
+    <AppShell
+      mode="static"
+      className="app-shell"
+      header={{ height: 48 }}
+      navbar={{ width: panelWidths.sidebar, breakpoint: 0 }}
+      aside={{ width: panelWidths.settings, breakpoint: 0 }}
+      padding={0}
+    >
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
           <Text size="sm" fw={600} c="bright" lts="0.02em">
@@ -21,10 +29,14 @@ export default function App() {
           <ExportMenu pieces={pieces} generating={generating} />
         </Group>
       </AppShell.Header>
-      <AppShell.Navbar>
+      <AppShell.Navbar className="app-panel">
         <Sidebar />
-        <SidebarResizeHandle />
+        <PanelResizeHandle panel="sidebar" />
       </AppShell.Navbar>
+      <AppShell.Aside className="app-panel">
+        <SettingsPanel />
+        <PanelResizeHandle panel="settings" />
+      </AppShell.Aside>
       <AppShell.Main className="app-main">
         <BabylonViewer stlBuffer={previewBuffer} generating={generating} error={error} />
       </AppShell.Main>

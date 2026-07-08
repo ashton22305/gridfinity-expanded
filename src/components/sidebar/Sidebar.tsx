@@ -3,17 +3,15 @@ import { ScrollArea, Tabs } from '@mantine/core';
 import { ShapeTab } from './tabs/ShapeTab';
 import { WallsTab } from './tabs/WallsTab';
 import { SplitTab } from './tabs/SplitTab';
-import { DimensionsTab } from './tabs/DimensionsTab';
-import { FeaturesTab } from './tabs/FeaturesTab';
-import { PrinterTab } from './tabs/PrinterTab';
 
+/**
+ * The left sidebar's tabs: the spatial cell/edge/split-line editors.
+ * Form-shaped parameter groups live in `SECTIONS` in SettingsPanel.tsx.
+ */
 const TABS = {
   Shape: ShapeTab,
   Walls: WallsTab,
   Split: SplitTab,
-  Dimensions: DimensionsTab,
-  Features: FeaturesTab,
-  Printer: PrinterTab,
 } as const;
 
 type Tab = keyof typeof TABS;
