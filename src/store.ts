@@ -4,9 +4,24 @@ import { PRINTER_PROFILES, computeAutoSplitLines } from './lib/printers';
 
 const DEFAULT_PRINTER = PRINTER_PROFILES[5]; // Prusa MK4 / MK3S+
 
-export const SIDEBAR_MIN_WIDTH = 220;
-export const SIDEBAR_MAX_WIDTH = 900;
-const DEFAULT_SIDEBAR_WIDTH = 450;
+export const PANEL_MIN_WIDTH = 220;
+export const PANEL_MAX_WIDTH = 900;
+
+/**
+ * The two resizable side panels: `sidebar` (left — the Shape/Walls/Split
+ * editors) and `settings` (right — the Dimensions/Features/Printer forms).
+ */
+export type PanelSide = 'sidebar' | 'settings';
+
+/**
+ * Defaults leave the viewer ~2/3 of a 1080p-class window: the sidebar only
+ * needs to host the cell editors now that the parameter forms live on the
+ * right, and the settings forms read fine at roughly control width.
+ */
+const DEFAULT_PANEL_WIDTHS: Record<PanelSide, number> = {
+  sidebar: 360,
+  settings: 300,
+};
 
 /** Editor grid bounds (cells). The minimum also grows to cover the painted shape. */
 export const MAX_GRID = 40;
@@ -64,12 +79,12 @@ interface AppState {
   /** Editor canvas size in cells — purely a UI concern, not part of the geometry config. */
   gridCols: number;
   gridRows: number;
-  /** Sidebar width in px — purely a UI concern, not part of the geometry config. */
-  sidebarWidth: number;
+  /** Side panel widths in px — purely a UI concern, not part of the geometry config. */
+  panelWidths: Record<PanelSide, number>;
   updateConfig: (patch: Partial<BinConfig>) => void;
   setPrinter: (printer: PrinterProfile) => void;
   setGridSize: (cols: number, rows: number) => void;
-  setSidebarWidth: (width: number) => void;
+  setPanelWidth: (panel: PanelSide, width: number) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -77,7 +92,7 @@ export const useAppStore = create<AppState>((set) => ({
   printer: DEFAULT_PRINTER,
   gridCols: 7,
   gridRows: 7,
-  sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
+  panelWidths: DEFAULT_PANEL_WIDTHS,
 
   updateConfig: (patch) =>
     set((s) => ({ config: withAutoSplit({ ...s.config, ...patch }, s.printer) })),
@@ -94,6 +109,11 @@ export const useAppStore = create<AppState>((set) => ({
       };
     }),
 
-  setSidebarWidth: (width) =>
-    set({ sidebarWidth: Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width))) }),
+  setPanelWidth: (panel, width) =>
+    set((s) => ({
+      panelWidths: {
+        ...s.panelWidths,
+        [panel]: Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, Math.round(width))),
+      },
+    })),
 }));

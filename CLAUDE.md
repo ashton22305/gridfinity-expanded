@@ -1,151 +1,153 @@
 # gridfinity-expanded
 
-Browser-based Gridfinity bin generator. Supports non-rectangular (tetris-piece) bin shapes, irregular divider placement, and configurable heights. Exports STL for FDM printing.
+Browser-based Gridfinity bin generator. It supports non-rectangular cell layouts, multiple logical bins in one editor, removable perimeter walls, grid dividers, free-form inner walls, split-for-printer export pieces, per-bin sloped floors, magnet recesses, and screw pilot holes. The app previews generated STL in the browser and exports binary STL files for FDM printing.
 
-## Tech stack
+## Tech Stack
 
-| Concern | Library | Why |
+| Concern | Library | Notes |
 |---|---|---|
-| Framework | React 19 + Vite 6 | Stable, GitHub Pages deploy |
-| State | `zustand` | single `useAppStore` (config + printer + editor grid size); tabs read it directly — no prop drilling |
-| Geometry (authoring) | `@jscad/modeling` | Programmatic CSG in TypeScript; builds the 2D profiles and primitive solids |
-| Geometry (booleans) | `manifold-3d` (WASM) | Guaranteed watertight, 2-manifold output — JSCAD's mesh booleans leave non-manifold T-junctions and its `offset()` self-intersects on thick walls |
-| 3D preview | Babylon.js | Microsoft-maintained; TypeScript-first |
-| Bundler | Vite 6 (rollup) | Vite 8 rolldown OOMs on large @jscad bundles |
-| Styling | Mantine 9 (`@mantine/core` + PostCSS) | themed component library: all control styling centralized in `src/theme.ts`; no utility classes / inline style config in JSX. Dark scheme forced |
-| Deploy | GitHub Actions → GitHub Pages | `.github/workflows/deploy.yml` |
+| Framework | React 19 + Vite 6 | `src/main.tsx` mounts the app and forces Mantine dark mode. |
+| State | `zustand` | One `useAppStore` owns `BinConfig`, printer profile, editor grid size, and side-panel widths. Tabs read/write the store directly. |
+| UI | Mantine 9 + PostCSS | AppShell owns layout chrome. Cross-app control defaults live in `src/theme.ts`; custom SVG editor styles live in `src/components/sidebar/editor.css`. |
+| Geometry authoring | `@jscad/modeling` | Builds 2D profiles and primitive solids in TypeScript. |
+| Geometry booleans | `manifold-3d` WASM | Production path for robust booleans, inward offsets, and watertight 2-manifold mesh output. |
+| Fallback geometry | JSCAD-only path | Used if WASM fails; split-aware, but lower fidelity for some features. |
+| Preview | Babylon.js | `BabylonViewer` loads generated STL buffers with the STL loader and auto-fits the camera. |
+| Export | Custom binary STL serializer | `meshToStl()` serializes manifold indexed meshes; `@jscad/stl-serializer` is used only for fallback. |
+| Deploy | GitHub Actions → GitHub Pages | `.github/workflows/deploy.yml`; custom domain is pinned by `public/CNAME`. |
 
-## Project layout
+## Project Layout
 
-```
+```text
 src/
+  main.tsx                 React root, MantineProvider, forced dark scheme
+  App.tsx                  AppShell header/sidebar/viewer/settings-panel layout
+  store.ts                 zustand store, defaults, auto split derivation, grid/panel sizing
+  theme.ts                 Mantine component defaultProps and centralized control styling
+  index.css                global sizing, AppShell workaround, viewer/panel scaffolding
   lib/
-    types.ts              shared types: BinConfig, GridCell, GridEdge, SplitLine, PrinterProfile
-    edges.ts              pure grid-edge helpers: perimeter/internal classification,
-                          effectiveWalls() (resolves open/divider config per bin or piece)
-    split.ts              pure split-line partitioning (partitionCells)
-    printers.ts           printer profiles, bed fit, computeAutoSplitLines/checkPieceFit
+    types.ts               shared BinConfig, GridCell, GridEdge, InnerWall, SplitLine, PrinterProfile
+    edges.ts               edge keys, perimeter/internal edge scans, wall toggle helpers
+    split.ts               split-line sorting/partitioning and logical-bin grouping
+    printers.ts            printer presets, bed fit checks, auto split line calculation
     geometry/
-      gridfinity.ts       geometry: generateBinManifold() (whole bin) and
-                          generateBinPieces() (split-aware, one solid per piece +
-                          exploded preview) are the default path; generateBin()/
-                          generateBinPiecesJscad() (pure JSCAD) are the fallback
-      manifold.ts         manifold-3d WASM init + JSCAD→manifold bridge + output weld
+      gridfinity.ts        manifold and JSCAD geometry builders
+      manifold.ts          WASM init, JSCAD adapters, mesh weld/repair
     export/
-      stl.ts              STL download helper + meshToStl() (indexed mesh → binary STL)
+      stl.ts               download helpers and binary STL serialization
   workers/
-    geometry.worker.ts    Web Worker: returns preview STL + one STL per split piece
+    geometry.worker.ts     manifold generation with JSCAD fallback; returns preview + per-piece STL buffers
   hooks/
-    useBinGeometry.ts     debounces config changes, drives worker; exposes previewBuffer + pieces
+    useBinGeometry.ts      1s debounce, long-lived worker, stale request discard
   components/
-    ui/                   thin app-specific compositions over Mantine (styling
-                          decided once): Field/Label/Hint, SliderField, StatusBanner.
-                          Plain controls (Button, Select, NumberInput, Switch, Tabs,
-                          Menu, Alert) are used from @mantine/core directly
+    ExportMenu.tsx         single or multi-piece STL download menu
+    viewer/BabylonViewer.tsx
+    ui/                    Field, SliderField, StatusBanner wrappers
     sidebar/
-      Sidebar.tsx         tabbed left panel (tab name → component map)
-      binColors.ts        bin-id → color palette for the editors
-      EditorCanvas.tsx    shared SVG base for Walls/Split editors (grid bg + bin-tinted
-                          cells; exports CELL/PAD svg-unit constants)
+      Sidebar.tsx          left-panel tab map: Shape, Walls, Split (spatial editors)
+      SettingsPanel.tsx    right-panel section stack: Printer, Dimensions, Features
+      PanelResizeHandle.tsx  inner-edge drag strip shared by both side panels
+      EditorCanvas.tsx     shared SVG grid/editor background
+      editorCoords.ts      SVG/grid/mm coordinate conversion
+      binColors.ts         logical-bin color palette
+      editor.css           bespoke SVG editor and grid-cell styles
       tabs/
-        ShapeTab.tsx      click/drag cell editor; resizable grid (up to 40×40),
-                          multi-bin painting palette
-        WallsTab.tsx      SVG edge editor (open walls, grid dividers) + drag-to-draw
-                          free-form inner walls (endpoints snap to grid lines,
-                          segments snap near 45° increments) with width/height list
-        SplitTab.tsx      SVG split-line editor (auto-from-bed / manual) + piece fit
-        DimensionsTab.tsx height (1–20u), wall thickness, cavity corner radius,
-                          inner fillet, per-bin base slope (angle + low side)
-        PrinterTab.tsx    printer presets + bed-fit warning
-    viewer/
-      BabylonViewer.tsx   Babylon.js canvas; reloads mesh on stlBuffer change
-    ExportMenu.tsx        Export STL button (dropdown per piece when split)
-  store.ts                zustand store: BinConfig + PrinterProfile + editor grid size;
-                          auto split mode re-derives splitLines inside every setter
-  App.tsx                 root: header/sidebar/viewer layout; feeds store config to useBinGeometry
+        ShapeTab.tsx       resizable 1-40 cell editor, drag painting, multi-bin palette
+        WallsTab.tsx       perimeter open walls, internal dividers, free-form inner walls
+        SplitTab.tsx       auto/manual split lines and per-piece bed-fit status
+        DimensionsTab.tsx  height, wall thickness, cavity radius, inner fillet, base slopes (settings section)
+        FeaturesTab.tsx    magnet recess and M3 screw pilot toggles (settings section)
+        PrinterTab.tsx     printer presets, custom bed size, bed-fit status (settings section)
+scripts/check-manifold.ts  production-path manifold/STL validation matrix
 ```
 
-## Gridfinity dimensions (key constants in gridfinity.ts)
+## Runtime Flow
 
-| Name | Value | Source |
-|---|---|---|
-| `GRID_PITCH` | 42 mm | Gridfinity standard |
-| `OUTER_SIZE` | 41.5 mm | 42 − 0.5 mm clearance |
-| `BASE_HEIGHT` | 4.75 mm | Gridfinity standard |
-| `FLOOR_THICKNESS` | 1.2 mm | one nozzle width |
-| `HEIGHT_PER_UNIT` | 7 mm | Gridfinity standard |
-| `MAGNET_RADIUS` | 3.25 mm | 6.5 mm OD N52 disc magnets |
-| `MAGNET_DEPTH` | 2.4 mm | 2 mm magnet + 0.4 mm tolerance |
-| `MAGNET_INSET` | 13.5 mm | from cell centre to magnet centre |
+`App.tsx` reads config and panel widths from `useAppStore`, passes config to `useBinGeometry`, and renders `ExportMenu` plus `BabylonViewer`. The AppShell has two resizable side panels: the left sidebar (`AppShell.Navbar`) hosts the spatial editor tabs (Shape, Walls, Split), and the right settings panel (`AppShell.Aside`) stacks the parameter forms (Printer, Dimensions, Features) in one scroll view. Both panels resize via `PanelResizeHandle` on their inner edge, clamped by `PANEL_MIN_WIDTH`/`PANEL_MAX_WIDTH` in `store.ts`. `useBinGeometry` keeps one module worker alive, waits 1000 ms after config changes, tags each request with `requestId`, and ignores stale worker replies. The worker initializes `manifold-3d` through Vite's `manifold.wasm?url`; if init or generation fails, it falls back to `generateBinPiecesJscad()` and serializes with `@jscad/stl-serializer`.
 
-Geometry semantics worth knowing:
+In auto split mode, `store.ts` re-derives `splitLines` on every config or printer write via `computeAutoSplitLines()`. The stored config is therefore the effective config consumed by geometry.
 
-- The **outer wall is always the Gridfinity spec profile** (41.5 mm/cell, 3.75 mm
-  corners = `PEG_R_TOP`). `cavityCornerRadius` rounds only the cavity interior
-  (a Clipper2 morphological opening, binary-search-clamped so the cavity never
-  collapses); `innerFilletRadius` is the floor-to-wall fillet.
-- Walls are per-edge: `openEdges` removes perimeter walls, `dividerEdges` adds
-  internal ones. The cavity cross-section is authored as plain rects in
-  `planCavity()` (cell squares minus wall/divider strips + concave-corner
-  patches), shared by both build paths. Rounding and fillet insets operate on
-  the cavity *extended through its open faces*, then intersect back — otherwise
-  they retreat at open/seam faces and grow ribs on glue surfaces.
-- `innerWalls` are free-form (non-grid-aligned) segments in mm with per-wall
-  width and height, clipped to the outer profile so an end reaching a wall
-  overlaps into it. A lower wall gets a concave quarter-round ramp
-  (`TRANSITION_R`, clamped to headroom) into anything taller it touches, built
-  as slabs of dilate(taller-material) ∩ wall-footprint that shrink with height
-  and overshoot CSG_EPSILON *downward* (containment rule). The JSCAD fallback
-  skips the ramps.
-- `baseSlopes` tilts cavity floors PER LOGICAL BIN (`{bin, angle, dir}`; absent
-  = flat): a wedge = cavityCS expanded 0.2 mm into the walls (flush-face
-  membrane guard), clipped to the outer profile, extruded and cut by
-  `trimByPlane`. The slope plane spans the logical bin's bbox so split pieces
-  line up. Fallback approximates with slab stairs.
-- `GridCell.bin` (optional, default 0) assigns cells to distinct logical bins:
-  each is generated independently with full perimeter walls (inter-bin edges
-  are perimeter for both sides), exported as its own STL, spec 0.5 mm apart.
-- Split pieces are independent bins; seam edges are open unless a divider sits
-  exactly on the split line. A piece's outer profile is the LOGICAL BIN's spec
-  profile cut by the piece's pitch box (`pieceProfileCS`), so seam faces land
-  exactly on the split-line pitch plane — square-cornered, without the 0.25 mm
-  perimeter clearance — and glued pieces butt flush. (A profile built from the
-  piece's own cells insets/rounds the seam like an outer wall, gapping every
-  glue joint.) Stale edge/line config entries are ignored by the geometry
-  layer, never migrated.
-- `manifoldMesh()` welds output vertices and repairs float32-degenerate sliver
-  triangles by splitting the neighbor across the sliver's long edge — keep it
-  in the export path.
+## Gridfinity Constants
 
-## Adding features
+Key values in `src/lib/geometry/gridfinity.ts`:
 
-- **New bin parameter** → add to `BinConfig` in `types.ts` (and `DEFAULT_CONFIG` in `store.ts`), update `gridfinity.ts` (both `generateBinManifold` and the `generateBin` fallback), add control in the appropriate tab component via `updateConfig({ … })`.
-- **New tab** → add to the `TABS` map in `Sidebar.tsx`, create `src/components/sidebar/tabs/MyTab.tsx` (no props — read `useAppStore()`).
-- **New export format** → add serializer in `lib/export/`, add option to `ExportMenu.tsx`.
-- **Manifold correctness** → after any geometry change, run `npm run check:manifold`. It builds every config in the test matrix and asserts the exported STL is watertight and 2-manifold (no boundary/non-manifold edges, degenerate or duplicate faces). Combine solids with manifold booleans and do inward 2D offsets with `CrossSection.offset` (never JSCAD `offset()` for large inward deltas — it self-intersects). Feed the manifold engine only individually-closed primitives. Never stack extrusions **flush** unless both sides of the junction land on the bit-identical coordinate (e.g. an exactly-representable constant like `PEG_HEIGHT = 4.75`): z-values built from differing float expressions (`floorZ + i*stepH` vs `(floorZ + (i-1)*stepH) + stepH`) miss by an ULP, and the boolean keeps the sub-nanometre gap — subtracting such a stack leaves zero-thickness membranes that z-fight in slicer viewports. Instead overlap each solid by `CSG_EPSILON` into a neighbor whose cross-section contains its own, so the overshoot is swallowed inside the larger solid.
-- **Theming** → Mantine, theme-first. Change how controls look in **`src/theme.ts`** (per-component `defaultProps` in one `createTheme`) — never by adding className/inline style in JSX. Use Mantine components + layout primitives (`Stack`/`Group`/`Text`); size/color come from the theme. The only hand-written CSS is `src/index.css` (full-viewport layout scaffolding) and `src/components/sidebar/editor.css` (the bespoke SVG grid editors, which a component library can't express) — both keyed by class and pulling colors from Mantine CSS variables (`var(--mantine-color-*)`). Prioritize changing styling in theme.ts over the raw .css files unless absolutely necessary, and there should be a comment accompanying the CSS if this choice is made. Genuinely data-driven values (a cell's bin color, a wall's pixel thickness) stay inline; design constants never do.
+| Name | Value | Meaning |
+|---|---:|---|
+| `GRID_PITCH` | 42 mm | Gridfinity cell pitch |
+| `HEIGHT_PER_UNIT` | 7 mm | height-unit increment |
+| `BASE_TOTAL_HEIGHT` | 7 mm | connector peg plus bridge before cavity floor |
+| `PEG_HEIGHT` | 4.75 mm | connector peg height |
+| `PEG_W_TOP` | 41.5 mm | 42 mm pitch minus 0.5 mm clearance |
+| `PEG_R_TOP` / `OUTER_R` | 3.75 mm | spec outer corner radius |
+| `FLOOR_THICKNESS` | 1.2 mm | cavity floor thickness |
+| `MAGNET_RADIUS` / `MAGNET_DEPTH` | 3.25 / 2.4 mm | 6.5 mm magnet recess |
+| `SCREW_RADIUS` / `SCREW_DEPTH` | 1.5 / 6.0 mm | M3 pilot holes |
+| `FASTENER_INSET` | 13.0 mm | pocket centers from cell center |
+| `CSG_EPSILON` | 0.01 mm | intentional boolean overlap |
+| `EXPLODE_GAP` | 4 mm | preview gap between split pieces |
 
-## Common mistakes to avoid
-- **Do not reinvent the wheel.** You should prioritize fitting with the conventions of the rest of the codebase over the "prettiness" of the website unless specifically told to restructure. Always prefer to use existing publicly available, well maintained libraries and frameworks if available.
-- **Do not provide suboptimal solutions because it is more common or easier.** For example, it may be tempting to insert raw HTML into a .tsx file becasue it can be iterated very quickly. However, this is bad practice because you should be relying on existing components available in the stack this project uses. Shortcuts that avoid libraries should only be done if there is no other elegant solution and should be properly justified in a comment and when reporting your results after a prompt.
+Total displayed height is `BASE_TOTAL_HEIGHT + heightUnits * HEIGHT_PER_UNIT`.
 
-## Local dev
+## Geometry Semantics
+
+- The outer wall always follows the spec profile: 41.5 mm top width with 3.75 mm corners. `cavityCornerRadius` rounds only the cavity interior, using a clamped morphological opening so narrow channels do not collapse.
+- `GridCell.bin` assigns cells to logical bins. Missing `bin` means bin 0. Adjacent cells with different bin ids become separate complete bins with their own double walls.
+- `openEdges` remove perimeter walls. `dividerEdges` add internal grid-aligned walls. Edges between different logical bins are perimeter edges for both bins.
+- The cavity is planned from axis-aligned rectangles in `planCavity()` so manifold and JSCAD paths share wall layout. Rounding and fillet insets operate through open faces and are intersected back to avoid ribs at open or split seams.
+- `innerWalls` are free-form mm segments with per-wall width and optional height. Full-height walls reach the top; lower walls ramp into taller structures they touch. The JSCAD fallback skips these ramps.
+- `baseSlopes` are per logical bin. An absent entry means flat. A zero-angle entry should not be persisted; `DimensionsTab` removes it.
+- Split pieces are generated independently. Seam edges are open unless a divider lies exactly on the split line. The manifold path cuts a piece from the logical bin's whole outer profile with `pieceProfileCS()` so glue seams land on pitch planes instead of acquiring outer-wall clearance.
+- `manifoldMesh()` is part of the export path. It welds output vertices, drops collapsed triangles, and repairs float32-degenerate slivers by splitting the neighboring triangle instead of opening a hole.
+
+## Adding Features
+
+- **New bin parameter** → add it to `BinConfig` in `src/lib/types.ts`, add a default in `DEFAULT_CONFIG` in `src/store.ts`, update both `generateBinManifold`/`generateBinPieces` and the JSCAD fallback in `gridfinity.ts`, then add the control to the appropriate tab/section with `updateConfig({ ... })`.
+- **New tab or settings section** → create `src/components/sidebar/tabs/MyTab.tsx` and read/write state through `useAppStore()` rather than threading props. Spatial editors go in `TABS` in `src/components/sidebar/Sidebar.tsx` (left panel); form-shaped parameter groups go in `SECTIONS` in `src/components/sidebar/SettingsPanel.tsx` (right panel).
+- **New export format** → add serialization/download helpers under `src/lib/export/`, then extend `ExportMenu.tsx`. `@jscad/3mf-serializer` is installed, but no 3MF UI/export path is wired yet.
+- **New printer behavior** → update `PRINTER_PROFILES`, `checkBedFit()`, `computeAutoSplitLines()`, or `checkPieceFit()` in `src/lib/printers.ts`; remember auto split mode is re-derived in the store.
+- **Worker-visible changes** → ensure data crossing `postMessage` remains structured-clone friendly. `BinConfig` should stay plain JSON data.
+
+## Manifold Correctness
+
+After any geometry, split, STL, printer-fit, or config-shape change, run `npm run check:manifold`. It validates production manifold output and serialized STL output across normal, split, multi-bin, open-wall, divider, inner-wall, slope, fastener, and edge-case configurations. It rejects boundary edges, non-manifold edges, orientation errors, degenerate triangles, duplicate faces, and zero-thickness membranes.
+
+Combine solids with manifold booleans and do inward 2D offsets with `CrossSection.offset`; never use JSCAD `offset()` for large inward deltas because it self-intersects. Feed the manifold engine only individually closed primitives. Never stack extrusions flush unless both sides of the junction land on a bit-identical coordinate, such as `PEG_HEIGHT = 4.75`. Z-values built from different float expressions can miss by an ULP, and booleans preserve the sub-nanometre gap; after float32 output welds, that gap can become a zero-thickness membrane. Prefer a `CSG_EPSILON` overlap into a containing neighbor so the overshoot is swallowed inside the larger solid.
+
+## UI and Theming Rules
+
+Mantine is the default for controls and layout. Use Mantine components and primitives (`Stack`, `Group`, `Text`, `Paper`, `Select`, `NumberInput`, `Switch`, `SegmentedControl`, `Tabs`, `Menu`, `Alert`) before creating raw UI. Change cross-app control appearance in `src/theme.ts` through `createTheme()` component defaults. Use `src/index.css` only for viewport/layout scaffolding and specific AppShell/viewer workarounds. Use `src/components/sidebar/editor.css` only for the bespoke SVG/grid editors that a component library cannot express.
+
+Avoid design constants in JSX. Inline style is acceptable for genuinely data-driven values such as a cell's bin color, an SVG wall thickness, grid dimensions, or a small library workaround that cannot live cleanly in the theme.
+
+## Common Mistakes to Avoid
+
+- **Do not reinvent the wheel.** Prioritize fitting the conventions of this codebase over subjective visual polish unless explicitly asked to restructure. Prefer existing well-maintained libraries and the stack already in use.
+- **Do not provide suboptimal solutions because they are common or quick.** For example, inserting raw HTML into a `.tsx` file may be fast, but this app should rely on Mantine and existing components. Shortcuts that avoid the stack are acceptable only when no elegant existing-library solution exists, and they must be justified in code comments and in the final report.
+- **Do not bypass the store contract.** Tabs should read/write through `useAppStore()`. Keep `splitLines` effective in auto mode by using existing setters.
+- **Do not treat JSCAD fallback as the primary quality bar.** Keep it usable, but manifold output and `check:manifold` define production correctness.
+- **Do not add unrelated refactors.** Geometry, UI, and deployment assumptions are tightly coupled; keep changes scoped to the requested behavior.
+
+## Commands and Validation
 
 ```bash
 npm install
 npm run dev
+npm run build
+npm run lint
+npm run check:manifold
+npm run preview
 ```
+
+There is no dedicated unit test runner configured. `npm run build` performs TypeScript project checks and a production Vite build. `npm run lint` runs Oxlint. Use `npm run check:manifold` for geometry-affecting work.
 
 ## Deployment
 
-Push to `main`. GitHub Actions (`.github/workflows/deploy.yml`) builds and deploys to GitHub Pages automatically. Served from the custom domain `gridfinityexpanded.ashtonsouth.me` (root path, not a GitHub Pages project-page subpath) — `public/CNAME` pins the domain and Vite's `base` is always `/`. If Pages is ever pointed back at a project-page subpath instead of a custom domain, `base` needs to change accordingly.
+Pushes to `main` deploy through `.github/workflows/deploy.yml`: Node 20, `npm ci`, `npm run build`, upload `dist`, then deploy to GitHub Pages. The site is served from `gridfinityexpanded.ashtonsouth.me`; `public/CNAME` pins the domain and `vite.config.ts` keeps `base: '/'`. If deployment ever moves back to a GitHub Pages project subpath, update `base` deliberately.
 
-## Known limitations (MVP)
+## Known Limitations
 
-- Bottom chamfer on bin edges not yet implemented (printable but not spec-perfect).
-- Babylon.js main bundle is ~6 MB; switch to tree-shaken imports from `@babylonjs/core/...` to reduce.
-- STL only; 3MF export not yet wired (`@jscad/3mf-serializer` is installed).
-- Inner-wall ramps blend into walls/dividers/taller inner walls but not into the
-  sloped-base wedge; inner walls have no floor fillet along their own base.
-- JSCAD fallback (WASM-failure mode only) skips inner-wall ramps and stair-steps
-  the sloped base.
+- STL is the only wired export format; 3MF dependencies are installed but unused.
+- The JSCAD fallback skips inner-wall transition ramps and approximates sloped floors with stair steps.
+- The JSCAD fallback can degrade split seam profile behavior if 2D intersection fails.
+- Babylon.js imports include engine, STL loader, scene loader, camera, lights, and material support; optimize imports if bundle size becomes a priority.
+- No unit/integration test runner is configured beyond build, lint, and manifold validation.

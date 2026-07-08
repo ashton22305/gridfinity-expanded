@@ -34,7 +34,7 @@ export const theme = createTheme({
       // 'pills' highlights the active tab with a filled background instead
       // of the 'default' variant's underline; radius 0 keeps them rectangular.
       defaultProps: { variant: 'pills', color: 'blue', radius: 0 },
-      // The sidebar's 6-way tab strip needs to stay compact and scroll
+      // The sidebar's tab strip needs to stay compact and scroll
       // horizontally rather than wrap; centralized here rather than as
       // per-instance overrides on <Tabs.List>/<Tabs.Tab>.
       styles: {
