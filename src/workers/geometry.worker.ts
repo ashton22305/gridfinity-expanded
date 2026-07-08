@@ -13,7 +13,7 @@ import type { BinConfig } from '../lib/types';
 const manifoldReady = initManifold(() => wasmUrl).catch(() => null);
 
 interface PieceBuffers {
-  preview: ArrayBuffer;
+  previews: { bin: number; buffer: ArrayBuffer }[];
   pieces: { name: string; buffer: ArrayBuffer }[];
 }
 
@@ -33,8 +33,12 @@ function jscadStl(geoms: unknown[]): ArrayBuffer {
 /** JSCAD fallback: split-aware generation via @jscad/stl-serializer. */
 function jscadPieces(config: BinConfig): PieceBuffers {
   const parts = generateBinPiecesJscad(config);
+  const binIds = [...new Set(parts.map((p) => p.bin))];
   return {
-    preview: jscadStl(parts.map((p) => p.previewGeom)),
+    previews: binIds.map((bin) => ({
+      bin,
+      buffer: jscadStl(parts.filter((p) => p.bin === bin).map((p) => p.previewGeom)),
+    })),
     pieces: parts.map((p) => ({ name: p.name, buffer: jscadStl([p.exportGeom]) })),
   };
 }
@@ -45,9 +49,12 @@ self.onmessage = async (e: MessageEvent<{ config: BinConfig; requestId: number }
     const wasm = await manifoldReady;
     let result: PieceBuffers;
     if (wasm) {
-      const { pieces, preview } = generateBinPieces(wasm, config);
+      const { pieces, previews } = generateBinPieces(wasm, config);
       result = {
-        preview: meshToStl(preview.vertProperties, preview.triVerts),
+        previews: previews.map((p) => ({
+          bin: p.bin,
+          buffer: meshToStl(p.mesh.vertProperties, p.mesh.triVerts),
+        })),
         pieces: pieces.map((p) => ({
           name: p.name,
           buffer: meshToStl(p.mesh.vertProperties, p.mesh.triVerts),
@@ -57,14 +64,14 @@ self.onmessage = async (e: MessageEvent<{ config: BinConfig; requestId: number }
       result = jscadPieces(config);
     }
     self.postMessage({ ok: true, requestId, ...result },
-      [result.preview, ...result.pieces.map((p) => p.buffer)]);
+      [...result.previews.map((p) => p.buffer), ...result.pieces.map((p) => p.buffer)]);
   } catch (err) {
     // A failure in the manifold path (e.g. an unexpected degenerate input) still
     // yields a model via the JSCAD fallback before surfacing an error.
     try {
       const result = jscadPieces(config);
       self.postMessage({ ok: true, requestId, ...result },
-        [result.preview, ...result.pieces.map((p) => p.buffer)]);
+        [...result.previews.map((p) => p.buffer), ...result.pieces.map((p) => p.buffer)]);
     } catch {
       self.postMessage({ ok: false, requestId, error: String(err) });
     }

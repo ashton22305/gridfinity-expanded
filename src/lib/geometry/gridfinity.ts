@@ -628,6 +628,25 @@ function translateMesh(mesh: BinMesh, dx: number, dy: number): BinMesh {
   return { vertProperties: vp, triVerts: mesh.triVerts };
 }
 
+/**
+ * Mirrors a mesh across the XZ plane (y → offset − y), reversing triangle
+ * winding so normals stay outward. The editors map SVG y (downward) straight to
+ * mm +y while solids extrude up in +Z, so an unmirrored part viewed from above
+ * is the chiral mirror of the drawn layout; every output mesh is mirrored here
+ * so canvas, preview, and printed part all agree.
+ */
+function mirrorMeshY(mesh: BinMesh, offset: number): BinMesh {
+  const vp = new Float32Array(mesh.vertProperties);
+  for (let i = 1; i < vp.length; i += 3) vp[i] = offset - vp[i];
+  const tv = new Uint32Array(mesh.triVerts.length);
+  for (let i = 0; i < tv.length; i += 3) {
+    tv[i] = mesh.triVerts[i];
+    tv[i + 1] = mesh.triVerts[i + 2];
+    tv[i + 2] = mesh.triVerts[i + 1];
+  }
+  return { vertProperties: vp, triVerts: tv };
+}
+
 function concatMeshes(meshes: BinMesh[]): BinMesh {
   if (meshes.length === 1) return meshes[0];
   const vertTotal = meshes.reduce((n, m) => n + m.vertProperties.length, 0);
@@ -685,6 +704,11 @@ export interface BinPiece {
   mesh: BinMesh;   // piece-local coordinates (bbox min at the origin), print-ready
 }
 
+export interface BinPreview {
+  bin: number;     // logical bin id, so the viewer can color-match the editors
+  mesh: BinMesh;   // whole-layout coordinates, exploded, mirrored to match the canvas
+}
+
 /**
  * Split-aware build: partitions each logical bin's cells by config.splitLines
  * and generates every piece as an independent watertight solid. Seam faces
@@ -692,28 +716,33 @@ export interface BinPiece {
  * glued pieces form one continuous bin; edges between DIFFERENT logical bins
  * are ordinary perimeter walls. Every piece keeps its own base pegs.
  *
- * The preview shows the pieces in layout coordinates, exploded by EXPLODE_GAP
+ * The previews show the pieces in layout coordinates, exploded by EXPLODE_GAP
  * per split-grid position so seams are visible (adjacent logical bins stay in
- * place — they are already separate solids). It is a plain concatenation of
- * the independently-manifold piece meshes.
+ * place — they are already separate solids), one concatenated mesh per logical
+ * bin so the viewer can color-match the editors.
+ *
+ * Every output mesh (pieces and previews) is mirrored via mirrorMeshY so the
+ * part matches the canvas drawing instead of its chiral mirror.
  */
 export function generateBinPieces(
   wasm: ManifoldToplevel, config: BinConfig,
-): { pieces: BinPiece[]; preview: BinMesh } {
+): { pieces: BinPiece[]; previews: BinPreview[] } {
   if (config.cells.length === 0) {
     const mesh = generateBinManifold(wasm, config);
-    return { pieces: [{ name: pieceName(0, 1, 0, 1), col: 0, row: 0, mesh }], preview: mesh };
+    return { pieces: [{ name: pieceName(0, 1, 0, 1), col: 0, row: 0, mesh }], previews: [{ bin: 0, mesh }] };
   }
 
+  const layoutH = (Math.max(...config.cells.map((c) => c.y)) + 1) * GRID_PITCH;
   const bins = groupBins(config.cells);
   const pieces: BinPiece[] = [];
-  const previewMeshes: BinMesh[] = [];
+  const previews: BinPreview[] = [];
   const partsByBin = bins.map((bin) => partitionCells(bin.cells, config.splitLines ?? []));
   const anySplit = partsByBin.some((parts) => parts.length > 1);
   bins.forEach((bin, bi) => {
     const parts = partsByBin[bi];
     // Whole-bin spec profile, built once and shared by every piece of this bin.
     const binOuterCS = geom2ToCrossSection(wasm, buildOuterProfile(bin.cells));
+    const binPreviewMeshes: BinMesh[] = [];
     parts.forEach((part, i) => {
       const solid = generatePieceManifold(
         wasm, config, part.cells, bin.cells, binOuterCS,
@@ -721,19 +750,23 @@ export function generateBinPieces(
       const mesh = manifoldMesh(solid);
       const minX = Math.min(...part.cells.map((c) => c.x));
       const minY = Math.min(...part.cells.map((c) => c.y));
+      const maxY = Math.max(...part.cells.map((c) => c.y));
       pieces.push({
         name: pieceName(bi, bins.length, i, parts.length),
         col: part.col,
         row: part.row,
-        mesh: translateMesh(mesh, -minX * GRID_PITCH, -minY * GRID_PITCH),
+        mesh: mirrorMeshY(
+          translateMesh(mesh, -minX * GRID_PITCH, -minY * GRID_PITCH),
+          (maxY - minY + 1) * GRID_PITCH),
       });
-      previewMeshes.push(anySplit
+      binPreviewMeshes.push(mirrorMeshY(anySplit
         ? translateMesh(mesh, part.col * EXPLODE_GAP, part.row * EXPLODE_GAP)
-        : mesh);
+        : mesh, layoutH));
     });
+    previews.push({ bin: bin.id, mesh: concatMeshes(binPreviewMeshes) });
   });
 
-  return { pieces, preview: concatMeshes(previewMeshes) };
+  return { pieces, previews };
 }
 
 // ── JSCAD fallback path ────────────────────────────────────────────────────────
@@ -906,16 +939,21 @@ export function generateBin(config: BinConfig): Geom3 {
 
 export interface BinPieceGeom {
   name: string;
+  bin: number;         // logical bin id, so the viewer can color-match the editors
   exportGeom: Geom3;   // piece-local coordinates, print-ready
   previewGeom: Geom3;  // whole-bin coordinates, exploded
 }
 
-/** JSCAD-only fallback for the split-aware path. */
+/**
+ * JSCAD-only fallback for the split-aware path. Output geoms are mirrored
+ * across Y (same rationale as mirrorMeshY) so the part matches the canvas.
+ */
 export function generateBinPiecesJscad(config: BinConfig): BinPieceGeom[] {
   if (config.cells.length === 0) {
     const geom = generateBin(config);
-    return [{ name: pieceName(0, 1, 0, 1), exportGeom: geom, previewGeom: geom }];
+    return [{ name: pieceName(0, 1, 0, 1), bin: 0, exportGeom: geom, previewGeom: geom }];
   }
+  const layoutH = (Math.max(...config.cells.map((c) => c.y)) + 1) * GRID_PITCH;
   const bins = groupBins(config.cells);
   const partsByBin = bins.map((bin) => partitionCells(bin.cells, config.splitLines ?? []));
   const anySplit = partsByBin.some((parts) => parts.length > 1);
@@ -928,12 +966,17 @@ export function generateBinPiecesJscad(config: BinConfig): BinPieceGeom[] {
         resolveWalls(part.cells, bin.cells, config), slopeForBin(config, bin.id));
       const minX = Math.min(...part.cells.map((c) => c.x));
       const minY = Math.min(...part.cells.map((c) => c.y));
+      const maxY = Math.max(...part.cells.map((c) => c.y));
+      const local = transforms.translate([-minX * GRID_PITCH, -minY * GRID_PITCH, 0], geom) as Geom3;
+      const placed = anySplit
+        ? transforms.translate([part.col * EXPLODE_GAP, part.row * EXPLODE_GAP, 0], geom) as Geom3
+        : geom;
       return {
         name: pieceName(bi, bins.length, i, parts.length),
-        exportGeom: transforms.translate([-minX * GRID_PITCH, -minY * GRID_PITCH, 0], geom) as Geom3,
-        previewGeom: anySplit
-          ? transforms.translate([part.col * EXPLODE_GAP, part.row * EXPLODE_GAP, 0], geom) as Geom3
-          : geom,
+        bin: bin.id,
+        exportGeom: transforms.translate([0, (maxY - minY + 1) * GRID_PITCH, 0],
+          transforms.mirrorY(local)) as Geom3,
+        previewGeom: transforms.translate([0, layoutH, 0], transforms.mirrorY(placed)) as Geom3,
       };
     });
   });
