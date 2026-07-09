@@ -8,20 +8,25 @@ export interface PieceStl {
   buffer: ArrayBuffer;
 }
 
+export interface PreviewStl {
+  bin: number;
+  buffer: ArrayBuffer;
+}
+
 interface GeometryState {
-  previewBuffer: ArrayBuffer | null;
+  previews: PreviewStl[];
   pieces: PieceStl[];
   generating: boolean;
   error: string | null;
 }
 
 type WorkerResult =
-  | { ok: true; preview: ArrayBuffer; pieces: PieceStl[]; requestId: number }
+  | { ok: true; previews: PreviewStl[]; pieces: PieceStl[]; requestId: number }
   | { ok: false; error: string; requestId: number };
 
 export function useBinGeometry(config: BinConfig): GeometryState {
   const [state, setState] = useState<GeometryState>({
-    previewBuffer: null,
+    previews: [],
     pieces: [],
     generating: false,
     error: null,
@@ -46,7 +51,7 @@ export function useBinGeometry(config: BinConfig): GeometryState {
       const data = e.data;
       if (data.requestId !== requestIdRef.current) return; // superseded — discard stale result
       if (data.ok) {
-        setState({ previewBuffer: data.preview, pieces: data.pieces, generating: false, error: null });
+        setState({ previews: data.previews, pieces: data.pieces, generating: false, error: null });
       } else {
         setState((s) => ({ ...s, generating: false, error: data.error }));
       }

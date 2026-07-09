@@ -36,7 +36,7 @@ src/
     export/
       stl.ts               download helpers and binary STL serialization
   workers/
-    geometry.worker.ts     manifold generation with JSCAD fallback; returns preview + per-piece STL buffers
+    geometry.worker.ts     manifold generation with JSCAD fallback; returns per-bin preview + per-piece STL buffers
   hooks/
     useBinGeometry.ts      1s debounce, long-lived worker, stale request discard
   components/
@@ -98,6 +98,7 @@ Total displayed height is `BASE_TOTAL_HEIGHT + heightUnits * HEIGHT_PER_UNIT`.
 - `baseSlopes` are per logical bin. An absent entry means flat. A zero-angle entry should not be persisted; `DimensionsTab` removes it.
 - Split pieces are generated independently. Seam edges are open unless a divider lies exactly on the split line. The manifold path cuts a piece from the logical bin's whole outer profile with `pieceProfileCS()` so glue seams land on pitch planes instead of acquiring outer-wall clearance.
 - `manifoldMesh()` is part of the export path. It welds output vertices, drops collapsed triangles, and repairs float32-degenerate slivers by splitting the neighboring triangle instead of opening a hole.
+- Every output mesh (previews and export pieces) is mirrored across Y on the way out of `generateBinPieces`/`generateBinPiecesJscad` (`mirrorMeshY`, `transforms.mirrorY`): the editors map SVG y (downward) straight to mm +y, so an unmirrored part would print as the chiral mirror of the drawn layout. Previews are returned one mesh per logical bin so `BabylonViewer` can color them with the editors' `binColor()` palette; the viewer renders a right-handed scene with unaltered STL coordinates (rigid −90° X rotation only) so it can never re-mirror the model.
 
 ## Adding Features
 

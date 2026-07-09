@@ -112,9 +112,12 @@ body.no-select {
   justify-content: center;
   pointer-events: none;
 }
-.viewer-overlay--busy {
-  background: color-mix(in srgb, var(--mantine-color-body) 70%, transparent);
-}
 .viewer-overlay--error {
   background: color-mix(in srgb, var(--mantine-color-body) 85%, transparent);
+}
+
+.viewer-reset {
+  position: absolute;
+  top: var(--mantine-spacing-sm);
+  right: var(--mantine-spacing-sm);
 }

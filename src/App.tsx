@@ -10,7 +10,7 @@ import { useAppStore } from './store';
 export default function App() {
   const config = useAppStore((s) => s.config);
   const panelWidths = useAppStore((s) => s.panelWidths);
-  const { previewBuffer, pieces, generating, error } = useBinGeometry(config);
+  const { previews, pieces, generating, error } = useBinGeometry(config);
 
   return (
     <AppShell
@@ -38,7 +38,7 @@ export default function App() {
         <PanelResizeHandle panel="settings" />
       </AppShell.Aside>
       <AppShell.Main className="app-main">
-        <BabylonViewer stlBuffer={previewBuffer} generating={generating} error={error} />
+        <BabylonViewer previews={previews} error={error} />
       </AppShell.Main>
     </AppShell>
   );
