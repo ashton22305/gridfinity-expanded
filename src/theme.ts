@@ -1,5 +1,6 @@
 import {
   createTheme,
+  Accordion,
   Button,
   NumberInput,
   Select,
@@ -25,6 +26,16 @@ export const theme = createTheme({
   defaultRadius: 'md',
   // App is a dense tool UI: default every control one step smaller than Mantine's.
   components: {
+    // Settings-panel sections: the panel is narrow, so section content hangs
+    // flush with the control instead of taking the default indent. (`multiple`
+    // is a per-instance prop — Mantine's theme types only accept single-mode
+    // defaults.)
+    Accordion: Accordion.extend({
+      styles: {
+        control: { paddingLeft: 0, paddingRight: 0 },
+        content: { padding: '0.75rem 0 1rem' },
+      },
+    }),
     Button: Button.extend({ defaultProps: { size: 'sm' } }),
     NumberInput: NumberInput.extend({ defaultProps: { size: 'xs' } }),
     Select: Select.extend({ defaultProps: { size: 'sm', allowDeselect: false } }),

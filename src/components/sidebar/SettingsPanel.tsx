@@ -1,4 +1,4 @@
-import { Divider, ScrollArea, Stack } from '@mantine/core';
+import { Accordion, ScrollArea } from '@mantine/core';
 import { DimensionsTab } from './tabs/DimensionsTab';
 import { FeaturesTab } from './tabs/FeaturesTab';
 import { PrinterTab } from './tabs/PrinterTab';
@@ -7,28 +7,34 @@ import { Label } from '../ui/Field';
 /**
  * The right panel's sections, top to bottom. Counterpart of `TABS` in
  * Sidebar.tsx: the sidebar tabs hold the spatial editors, while every
- * form-shaped parameter group lives here in one scroll view.
+ * form-shaped parameter group lives here as a collapsible accordion section.
  */
 const SECTIONS = {
-  Printer: PrinterTab,
   Dimensions: DimensionsTab,
   Features: FeaturesTab,
+  'Printer fit': PrinterTab,
 } as const;
+
+const SECTION_NAMES = Object.keys(SECTIONS) as (keyof typeof SECTIONS)[];
 
 export function SettingsPanel() {
   return (
     <ScrollArea h="100%" p="md">
-      <Stack gap="xl">
-        {(Object.keys(SECTIONS) as (keyof typeof SECTIONS)[]).map((name) => {
+      <Accordion multiple defaultValue={[...SECTION_NAMES]}>
+        {SECTION_NAMES.map((name) => {
           const Section = SECTIONS[name];
           return (
-            <Stack key={name} gap="md">
-              <Divider label={<Label>{name}</Label>} labelPosition="left" />
-              <Section />
-            </Stack>
+            <Accordion.Item key={name} value={name}>
+              <Accordion.Control>
+                <Label>{name}</Label>
+              </Accordion.Control>
+              <Accordion.Panel>
+                <Section />
+              </Accordion.Panel>
+            </Accordion.Item>
           );
         })}
-      </Stack>
+      </Accordion>
     </ScrollArea>
   );
 }
