@@ -1,8 +1,6 @@
 export interface GridCell {
   x: number;
   y: number;
-  bin?: number;  // logical bin id (default 0): adjacent cells with different ids
-                 // become physically separate bins with their own outer walls
 }
 
 export type EdgeOrientation = 'h' | 'v';
@@ -41,7 +39,7 @@ export interface InnerWall {
 }
 
 export interface BinConfig {
-  cells: GridCell[];
+  bins: LogicalBin[];
   heightUnits: number;
   wallThickness: number;        // mm, slider 0.8–4.0
   cavityCornerRadius: number;   // cavity interior corner rounding in mm; outer wall is always spec
@@ -51,18 +49,23 @@ export interface BinConfig {
   openEdges: GridEdge[];        // perimeter edges whose wall is REMOVED (exceptions to the default)
   dividerEdges: GridEdge[];     // internal edges with a divider wall ADDED (exceptions to the default)
   innerWalls: InnerWall[];      // free-form (non-grid-aligned) walls inside the cavity
-  splitMode: 'auto' | 'manual'; // auto = UI derives splitLines from the printer bed
-  splitLines: SplitLine[];      // always the effective value the geometry consumes
-  baseSlopes: BinSlope[];       // per-bin cavity floor tilt; bins without an entry are flat
 }
 
 export type SlopeDir = '+x' | '-x' | '+y' | '-y';  // side the floor is LOWEST at (shape-editor axes)
 
 /** Cavity floor tilt for one logical bin; walls stay vertical, base stays spec. */
 export interface BinSlope {
-  bin: number;
   angle: number;   // degrees, 0 = flat
   dir: SlopeDir;
+}
+
+/** A complete logical bin and all state whose lifetime belongs to it. */
+export interface LogicalBin {
+  id: number;
+  cells: GridCell[];
+  isManual: boolean;
+  splitLines: SplitLine[]; // effective lines consumed by geometry
+  slope?: BinSlope;        // absent = flat
 }
 
 export interface PrinterProfile {
@@ -75,4 +78,8 @@ export interface BedFitResult {
   fits: boolean;
   binWidth: number;
   binDepth: number;
+  rotated?: boolean;
+  bin?: number; // logical bin id; present when checking bin-tagged cells spanning multiple bins
+  col?: number; // split-piece column; present when returned from checkPieceFit
+  row?: number; // split-piece row; present when returned from checkPieceFit
 }

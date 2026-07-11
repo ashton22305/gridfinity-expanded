@@ -6,7 +6,7 @@ import type { GridEdge, InnerWall } from '../../../lib/types';
 import {
   edgeKey, perimeterEdges, internalEdges, toggleEdge,
 } from '../../../lib/edges';
-import { groupBins } from '../../../lib/split';
+import { flattenBins } from '../../../lib/split';
 import { GRID_PITCH, HEIGHT_PER_UNIT, FLOOR_THICKNESS } from '../../../lib/geometry/gridfinity';
 import { useAppStore } from '../../../store';
 import { EditorCanvas } from '../EditorCanvas';
@@ -66,7 +66,8 @@ const LEGEND = [
 
 export function WallsTab() {
   const { config, updateConfig, gridCols, gridRows } = useAppStore();
-  const { cells, openEdges, dividerEdges, innerWalls } = config;
+  const { openEdges, dividerEdges, innerWalls } = config;
+  const cells = flattenBins(config.bins);
   const svgRef = useRef<SVGSVGElement>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
 
@@ -80,12 +81,12 @@ export function WallsTab() {
   const { perimeter, internal } = useMemo(() => {
     const perimeter = new Map<string, GridEdge>();
     const internal = new Map<string, GridEdge>();
-    for (const b of groupBins(cells)) {
+    for (const b of config.bins) {
       for (const e of perimeterEdges(b.cells)) perimeter.set(edgeKey(e), e);
       for (const e of internalEdges(b.cells)) internal.set(edgeKey(e), e);
     }
     return { perimeter, internal };
-  }, [cells]);
+  }, [config.bins]);
 
   // Rendered edge overlay. Memoized so per-pointer-move draft renders (setDraft
   // fires on every move while drawing) don't reconcile the whole edge layer.

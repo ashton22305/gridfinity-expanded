@@ -1,5 +1,5 @@
 import { useMemo, type ComponentProps } from 'react';
-import type { GridCell } from '../../lib/types';
+import type { DisplayCell } from '../../lib/split';
 import { binColor } from './binColors';
 import { CELL, PAD } from './editorCoords';
 import './editor.css';
@@ -7,7 +7,7 @@ import './editor.css';
 interface EditorCanvasProps extends ComponentProps<'svg'> {
   gridCols: number;
   gridRows: number;
-  cells: GridCell[];
+  cells: DisplayCell[];
 }
 
 /**

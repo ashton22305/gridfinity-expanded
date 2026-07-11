@@ -1,103 +1,146 @@
-import { SegmentedControl, Stack } from '@mantine/core';
-import type { SplitLine } from '../../../lib/types';
+import { ColorSwatch, Group, SegmentedControl, Stack, Text } from '@mantine/core';
+import type { GridCell, LogicalBin, SplitLine } from '../../../lib/types';
 import { checkPieceFit } from '../../../lib/printers';
-import { lineKey, toggleSplitLine } from '../../../lib/split';
+import { flattenBins, lineKey, partitionCells, toggleSplitLine } from '../../../lib/split';
 import { useAppStore } from '../../../store';
 import { EditorCanvas } from '../EditorCanvas';
 import { gridToSvg } from '../editorCoords';
+import { binColor } from '../binColors';
 import { Hint } from '../../ui/Field';
 import { StatusBanner } from '../../ui/StatusBanner';
 
+interface Fragment extends SplitLine {
+  key: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+function cellKey(x: number, y: number): string {
+  return `${x},${y}`;
+}
+
+/** Interior grid-edge fragments; no candidate extends outside its owning bin. */
+function splitFragments(cells: GridCell[]): Fragment[] {
+  const set = new Set(cells.map((c) => cellKey(c.x, c.y)));
+  const fragments: Fragment[] = [];
+  for (const cell of cells) {
+    if (set.has(cellKey(cell.x + 1, cell.y))) {
+      const line: SplitLine = { axis: 'x', index: cell.x + 1 };
+      fragments.push({ ...line, key: `${lineKey(line)}:${cell.y}`, x1: gridToSvg(line.index),
+        y1: gridToSvg(cell.y), x2: gridToSvg(line.index), y2: gridToSvg(cell.y + 1) });
+    }
+    if (set.has(cellKey(cell.x, cell.y + 1))) {
+      const line: SplitLine = { axis: 'y', index: cell.y + 1 };
+      fragments.push({ ...line, key: `${lineKey(line)}:${cell.x}`, x1: gridToSvg(cell.x),
+        y1: gridToSvg(line.index), x2: gridToSvg(cell.x + 1), y2: gridToSvg(line.index) });
+    }
+  }
+  return fragments;
+}
+
+function groupFragments(fragments: Fragment[]): Map<string, Fragment[]> {
+  const groups = new Map<string, Fragment[]>();
+  for (const fragment of fragments) {
+    const key = lineKey(fragment);
+    groups.set(key, [...(groups.get(key) ?? []), fragment]);
+  }
+  return groups;
+}
+
 export function SplitTab() {
-  const { config, updateConfig, printer, gridCols, gridRows } = useAppStore();
-  const { cells, splitMode, splitLines } = config;
+  const { config, updateBin, printer, gridCols, gridRows } = useAppStore();
+  const cells = flattenBins(config.bins);
 
-  if (cells.length === 0) {
-    return <Hint>Select cells in the Shape tab first.</Hint>;
+  if (cells.length === 0) return <Hint>Select cells in the Shape tab first.</Hint>;
+
+  const fit = checkPieceFit(config.bins, printer);
+
+  function setManual(bin: LogicalBin, isManual: boolean) {
+    updateBin(bin.id, { isManual });
   }
 
-  const xs = cells.map((c) => c.x);
-  const ys = cells.map((c) => c.y);
-  const minX = Math.min(...xs), maxX = Math.max(...xs);
-  const minY = Math.min(...ys), maxY = Math.max(...ys);
-  const activeKeys = new Set(splitLines.map(lineKey));
-  const isManual = splitMode === 'manual';
-
-  // Candidate lines: every interior grid line of the bounding box.
-  const candidates: SplitLine[] = [
-    ...Array.from({ length: maxX - minX }, (_, i): SplitLine => ({ axis: 'x', index: minX + i + 1 })),
-    ...Array.from({ length: maxY - minY }, (_, i): SplitLine => ({ axis: 'y', index: minY + i + 1 })),
-  ];
-
-  const fit = checkPieceFit(cells, splitLines, printer);
-  const worstSize = `${fit.worst.binWidth} × ${fit.worst.binDepth} mm`;
-  let fitMessage: string;
-  if (fit.pieces <= 1) {
-    fitMessage = fit.allFit
-      ? `Printed as a single bin — fits the ${printer.name} bed.`
-      : `Too large for the ${printer.name} bed (${worstSize}). Add split lines.`;
-  } else {
-    fitMessage = fit.allFit
-      ? `${fit.pieces} pieces — every piece fits the ${printer.name} bed.`
-      : `${fit.pieces} pieces, but the largest (${worstSize}) still exceeds the ${printer.name} bed.`;
-  }
-
-  function lineEndpoints(l: SplitLine) {
-    return l.axis === 'x'
-      ? { x1: gridToSvg(l.index), y1: gridToSvg(minY), x2: gridToSvg(l.index), y2: gridToSvg(maxY + 1) }
-      : { x1: gridToSvg(minX), y1: gridToSvg(l.index), x2: gridToSvg(maxX + 1), y2: gridToSvg(l.index) };
+  function toggle(bin: LogicalBin, line: SplitLine) {
+    updateBin(bin.id, {
+      isManual: true,
+      splitLines: toggleSplitLine(bin.splitLines, line),
+    });
   }
 
   return (
     <Stack className="no-select" gap="sm">
-      <SegmentedControl
-        fullWidth
-        aria-label="Split mode"
-        value={splitMode}
-        onChange={(value) => updateConfig({ splitMode: value as 'auto' | 'manual' })}
-        data={[
-          { label: 'Auto (fit bed)', value: 'auto' },
-          { label: 'Manual', value: 'manual' },
-        ]}
-      />
-
       <Hint>
-        {isManual
-          ? 'Click grid lines to split the bin into separately printed pieces.'
-          : `Split lines are placed automatically so every piece fits the ${printer.name} bed. Switch to Manual to adjust them.`}
+        Each bin owns its split lines. Automatic bins are split only when needed
+        to fit the {printer.name} bed.
       </Hint>
 
-      <EditorCanvas gridCols={gridCols} gridRows={gridRows} cells={cells}>
-        {candidates.map((l) => {
-          const p = lineEndpoints(l);
-          const active = activeKeys.has(lineKey(l));
+      <Stack gap="xs">
+        {config.bins.map((bin) => {
+          const pieces = partitionCells(bin.cells, bin.splitLines);
           return (
-            <g
-              key={lineKey(l)}
-              className={isManual ? 'split-line' : 'split-line is-static'}
-              onClick={isManual
-                ? () => updateConfig({ splitLines: toggleSplitLine(splitLines, l) })
-                : undefined}
-            >
-              <line {...p} className="split-line-hit" />
-              <line
-                {...p}
-                className={`split-line-visible ${
-                  active ? 'split-line-visible--active' : 'split-line-visible--inactive'
-                }`}
+            <Group key={bin.id} justify="space-between" wrap="nowrap">
+              <Group gap="xs" wrap="nowrap">
+                <ColorSwatch color={binColor(bin.id)} size={12} withShadow={false} />
+                <Text size="sm">Bin {bin.id + 1} · {pieces.length} piece{pieces.length !== 1 ? 's' : ''}</Text>
+              </Group>
+              <SegmentedControl
+                size="xs"
+                aria-label={`Split mode for bin ${bin.id + 1}`}
+                value={bin.isManual ? 'manual' : 'auto'}
+                onChange={(value) => setManual(bin, value === 'manual')}
+                data={[{ label: 'Automatic', value: 'auto' }, { label: 'Manual', value: 'manual' }]}
               />
-            </g>
+            </Group>
           );
+        })}
+      </Stack>
+
+      <EditorCanvas gridCols={gridCols} gridRows={gridRows} cells={cells}>
+        {config.bins.flatMap((bin) => {
+          const active = new Set(bin.splitLines.map(lineKey));
+          const groups = groupFragments(splitFragments(bin.cells));
+          return [...groups.entries()].map(([key, fragments]) => {
+            const line = fragments[0];
+            const isActive = active.has(key);
+            return (
+              <g
+                key={`${bin.id}:${key}`}
+                className="split-line"
+                onClick={() => toggle(bin, line)}
+              >
+                {fragments.map((fragment) => {
+                  const p = { x1: fragment.x1, y1: fragment.y1,
+                    x2: fragment.x2, y2: fragment.y2 };
+                  return (
+                    <g key={fragment.key}>
+                      <line {...p} className="split-line-hit" />
+                      <line
+                        {...p}
+                        className={`split-line-visible ${isActive
+                          ? 'split-line-visible--active'
+                          : 'split-line-visible--inactive'}`}
+                        style={isActive ? { stroke: binColor(bin.id) } : undefined}
+                      />
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          });
         })}
       </EditorCanvas>
 
-      <StatusBanner ok={fit.allFit}>{fitMessage}</StatusBanner>
+      <StatusBanner ok={fit.allFit}>
+        {fit.allFit
+          ? `${fit.pieces} piece${fit.pieces !== 1 ? 's' : ''} — every piece fits the ${printer.name} bed.`
+          : `${fit.pieces} pieces, but the largest (${fit.worst.binWidth} × ${fit.worst.binDepth} mm) still exceeds the ${printer.name} bed.`}
+      </StatusBanner>
 
-      {fit.pieces > 1 && (
+      {fit.pieces > config.bins.length && (
         <Hint>
-          Seams are open: glue the pieces together for one continuous bin.
-          A divider placed on a split line becomes a closed wall on both pieces.
-          Pieces keep their base pegs and sit on the baseplate like separate bins.
+          Split seams are open for gluing. A divider on a seam creates a closed
+          wall on both pieces, and every piece retains its Gridfinity base pegs.
         </Hint>
       )}
     </Stack>

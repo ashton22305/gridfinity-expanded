@@ -3,7 +3,7 @@ import { Button, ColorSwatch, Group, NumberInput, Stack, Text } from '@mantine/c
 import { cellKey } from '../../../lib/edges';
 import { GRID_PITCH } from '../../../lib/geometry/gridfinity';
 import { getGridFootprintCells } from '../../../lib/printers';
-import { groupBins } from '../../../lib/split';
+import { flattenBins } from '../../../lib/split';
 import { MAX_GRID, minGridSize, useAppStore } from '../../../store';
 import { binColor } from '../binColors';
 import { Hint, Label } from '../../ui/Field';
@@ -19,8 +19,9 @@ const GRID_SIZE_INPUT_WIDTH = 64;
 
 export function ShapeTab() {
   const { config, updateConfig, gridCols, gridRows, setGridSize } = useAppStore();
-  const cellBin = new Map(config.cells.map((c) => [cellKey(c), c.bin ?? 0]));
-  const bins = groupBins(config.cells);
+  const cells = flattenBins(config.bins);
+  const cellBin = new Map(cells.map((c) => [cellKey(c), c.bin]));
+  const bins = config.bins;
   const [activeBin, setActiveBin] = useState(0);
 
   // Track pointer-drag state so users can paint by holding the mouse.
@@ -29,20 +30,29 @@ export function ShapeTab() {
   // Bin ids offered for painting: every used id plus one fresh one.
   const usedIds = bins.map((b) => b.id);
   const nextId = usedIds.length ? Math.max(...usedIds) + 1 : 0;
-  const paletteIds = [...new Set([...usedIds, Math.min(nextId, 7)])].sort((a, b) => a - b);
+  const paletteIds = [...new Set([...usedIds, Math.min(nextId, 7), activeBin])].sort((a, b) => a - b);
 
   function assignCell(x: number, y: number) {
     const key = cellKey({ x, y });
     if (cellBin.get(key) === activeBin) return;
-    updateConfig({
-      cells: [...config.cells.filter((c) => cellKey(c) !== key), { x, y, bin: activeBin }],
-    });
+    const withoutCell = config.bins
+      .map((bin) => ({ ...bin, cells: bin.cells.filter((c) => cellKey(c) !== key) }))
+      .filter((bin) => bin.cells.length > 0);
+    const target = withoutCell.find((bin) => bin.id === activeBin);
+    const nextBins = target
+      ? withoutCell.map((bin) => bin.id === activeBin ? { ...bin, cells: [...bin.cells, { x, y }] } : bin)
+      : [...withoutCell, { id: activeBin, cells: [{ x, y }], isManual: false, splitLines: [] }];
+    updateConfig({ bins: nextBins.sort((a, b) => a.id - b.id) });
   }
 
   function removeCell(x: number, y: number) {
     const key = cellKey({ x, y });
     if (!cellBin.has(key)) return;
-    updateConfig({ cells: config.cells.filter((c) => cellKey(c) !== key) });
+    updateConfig({
+      bins: config.bins
+        .map((bin) => ({ ...bin, cells: bin.cells.filter((c) => cellKey(c) !== key) }))
+        .filter((bin) => bin.cells.length > 0),
+    });
   }
 
   function handlePointerDown(x: number, y: number) {
@@ -68,7 +78,6 @@ export function ShapeTab() {
     return el ? { x: Number(el.dataset.x), y: Number(el.dataset.y) } : null;
   }
 
-  const cells = config.cells;
   const { widthCells, depthCells } = getGridFootprintCells(cells);
   const min = minGridSize(cells);  // setGridSize clamps; this only feeds the input min attrs
 

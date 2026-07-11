@@ -1,14 +1,14 @@
 import { NumberInput, Paper, Select, Stack } from '@mantine/core';
-import { PRINTER_PROFILES, checkBedFit } from '../../../lib/printers';
+import { PRINTER_PROFILES, checkPieceFit } from '../../../lib/printers';
 import { useAppStore } from '../../../store';
 import { Hint } from '../../ui/Field';
 import { StatusBanner } from '../../ui/StatusBanner';
 
 export function PrinterTab() {
   const { config, printer, setPrinter } = useAppStore();
-  const cells = config.cells;
+  const cells = config.bins.flatMap((bin) => bin.cells);
   const isCustom = printer.name === 'Custom';
-  const bedFit = checkBedFit(cells, printer);
+  const bedFit = checkPieceFit(config.bins, printer);
 
   return (
     <Stack gap="md">
@@ -43,10 +43,10 @@ export function PrinterTab() {
       {cells.length === 0 ? (
         <Hint>Select cells in the Shape tab first.</Hint>
       ) : (
-        <StatusBanner ok={bedFit.fits}>
-          {bedFit.fits
+        <StatusBanner ok={bedFit.allFit}>
+          {bedFit.allFit
             ? `Fits on ${printer.name} (${printer.bedWidth} × ${printer.bedDepth} mm bed)`
-            : `This bin (${bedFit.binWidth} × ${bedFit.binDepth} mm) is too large for
+            : `A piece (${bedFit.worst.binWidth} × ${bedFit.worst.binDepth} mm) is too large for
                the ${printer.name} bed (${printer.bedWidth} × ${printer.bedDepth} mm).`}
         </StatusBanner>
       )}

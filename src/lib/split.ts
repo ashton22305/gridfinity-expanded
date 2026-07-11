@@ -1,6 +1,6 @@
 // Pure split-line partitioning. Split lines sit on integer grid coordinates and
 // slice the cell set into pieces; each piece is generated as an independent bin.
-import type { GridCell, SplitLine } from './types';
+import type { GridCell, LogicalBin, SplitLine } from './types';
 import { toggleByKey } from './edges';
 
 export function lineKey(l: SplitLine): string {
@@ -58,17 +58,9 @@ export function sortSplitLines(lines: SplitLine[]): SplitLine[] {
   return [...lines].sort((a, b) => a.axis.localeCompare(b.axis) || a.index - b.index);
 }
 
-/** Groups cells by logical bin id (ascending). Cells without an id are bin 0. */
-export function groupBins(cells: GridCell[]): { id: number; cells: GridCell[] }[] {
-  const map = new Map<number, GridCell[]>();
-  for (const c of cells) {
-    const id = c.bin ?? 0;
-    let group = map.get(id);
-    if (!group) {
-      group = [];
-      map.set(id, group);
-    }
-    group.push(c);
-  }
-  return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([id, group]) => ({ id, cells: group }));
+export interface DisplayCell extends GridCell { bin: number }
+
+/** Flat, bin-tagged cells for shared editor layers and layout-wide edge tools. */
+export function flattenBins(bins: LogicalBin[]): DisplayCell[] {
+  return bins.flatMap((bin) => bin.cells.map((cell) => ({ ...cell, bin: bin.id })));
 }
