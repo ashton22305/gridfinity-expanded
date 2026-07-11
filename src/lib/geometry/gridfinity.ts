@@ -263,13 +263,26 @@ interface CavityPlan {
  * Wall layout → rectangles. `t = halfTol + wallThickness` is the strip depth
  * measured from the 42 mm pitch line (0.25 mm clearance + the wall itself), so
  * the cavity face lands exactly `wallThickness` inside the outer wall face.
+ *
+ * `binCells`/`wholeWalls` describe the LOGICAL BIN this piece belongs to (the
+ * same values regardless of which piece is being planned): a concave corner's
+ * two bordering walls can end up owned by two different split pieces, so
+ * detecting the corner and deciding whether it's walled must look at the
+ * whole bin, not just this piece's own cells/edges. Only the piece that
+ * actually contains the patch's target cell adds it, so it's never built
+ * twice, dropped, or attempted by a piece that doesn't have the material to
+ * receive it.
  */
-function planCavity(cells: GridCell[], walls: EffectiveWalls, wallThickness: number, extDepth: number): CavityPlan {
+function planCavity(
+  cells: GridCell[], binCells: GridCell[], walls: EffectiveWalls, wholeWalls: EffectiveWalls,
+  wallThickness: number, extDepth: number,
+): CavityPlan {
   const P = GRID_PITCH;
   const halfTol = (GRID_PITCH - PEG_W_TOP) / 2;
   const t = halfTol + wallThickness;
   const OUT = 1;  // harmless outward slop past the pitch line
   const set = cellSet(cells);
+  const wholeSet = cellSet(binCells);
 
   const cellSquares: Rect[] = cells.map(({ x, y }) => ({ x: x * P, y: y * P, w: P, h: P }));
 
@@ -309,11 +322,13 @@ function planCavity(cells: GridCell[], walls: EffectiveWalls, wallThickness: num
   }
 
   // Concave-corner patches: where exactly one of a lattice point's four
-  // quadrant cells is absent and BOTH perimeter edges bordering the absent cell
-  // are walled, the two strips meet only at the lattice point, leaving a t×t
-  // cavity finger reaching the concave corner. Patch the diagonally opposite
-  // quadrant. If either edge is open, the wall correctly ends flush there.
-  const walledKeys = new Set(walls.walled.map((e) => `${e.orientation}:${e.x},${e.y}`));
+  // quadrant cells is absent from the WHOLE BIN and BOTH perimeter edges
+  // bordering the absent cell are walled in the whole bin, the two strips
+  // meet only at the lattice point, leaving a t×t cavity finger reaching the
+  // concave corner. Patch the diagonally opposite quadrant — but only from
+  // the piece that owns that quadrant's cell, since the two bordering edges
+  // (and the patch itself) can each land in a different split piece.
+  const wholeWalledKeys = new Set(wholeWalls.walled.map((e) => `${e.orientation}:${e.x},${e.y}`));
   const lattice = new Set<string>();
   for (const c of cells) {
     for (const [lx, ly] of [[c.x, c.y], [c.x + 1, c.y], [c.x, c.y + 1], [c.x + 1, c.y + 1]]) {
@@ -321,12 +336,15 @@ function planCavity(cells: GridCell[], walls: EffectiveWalls, wallThickness: num
       if (lattice.has(key)) continue;
       lattice.add(key);
       const quads: [number, number][] = [[-1, -1], [0, -1], [-1, 0], [0, 0]];
-      const absent = quads.filter(([qx, qy]) => !set.has(`${lx + qx},${ly + qy}`));
+      const absent = quads.filter(([qx, qy]) => !wholeSet.has(`${lx + qx},${ly + qy}`));
       if (absent.length !== 1) continue;
       const [qx, qy] = absent[0];
       const vKey = `v:${lx},${ly + qy}`;
       const hKey = `h:${lx + qx},${ly}`;
-      if (!walledKeys.has(vKey) || !walledKeys.has(hKey)) continue;
+      if (!wholeWalledKeys.has(vKey) || !wholeWalledKeys.has(hKey)) continue;
+      const patchCellX = lx + (qx === 0 ? -1 : 0);
+      const patchCellY = ly + (qy === 0 ? -1 : 0);
+      if (!set.has(`${patchCellX},${patchCellY}`)) continue;  // another piece owns this patch
       solidStrips.push({
         x: lx * P + (qx === 0 ? -t : 0),
         y: ly * P + (qy === 0 ? -t : 0),
@@ -583,7 +601,8 @@ function generatePieceManifold(
   solids.push(outerCS.extrude(totalHeight - PEG_HEIGHT).translate([0, 0, PEG_HEIGHT]));
   let bin = Manifold.union(solids);
 
-  const plan = planCavity(cells, walls, config.wallThickness, Math.max(rc, filletR) + 1);
+  const wholeWalls = resolveWalls(binCells, binCells, config);
+  const plan = planCavity(cells, binCells, walls, wholeWalls, config.wallThickness, Math.max(rc, filletR) + 1);
   const cavity = buildCavityManifold(wasm, plan, rc, filletR, totalHeight);
   if (cavity) {
     bin = bin.subtract(cavity.solid);
@@ -947,7 +966,8 @@ function generatePieceJscad(
 
   const outerProfile = pieceProfileJscad(cells, binCells, binOuterProfile);
   const shell = buildShell(cells, totalHeight, outerProfile);
-  const plan = planCavity(cells, walls, config.wallThickness, Math.max(rc, filletR) + 1);
+  const wholeWalls = resolveWalls(binCells, binCells, config);
+  const plan = planCavity(cells, binCells, walls, wholeWalls, config.wallThickness, Math.max(rc, filletR) + 1);
   const cavity = buildCavityJscad(plan, rc, filletR, totalHeight);
 
   let bin: Geom3 = cavity ? booleans.subtract(shell, cavity.geom) as Geom3 : shell;
