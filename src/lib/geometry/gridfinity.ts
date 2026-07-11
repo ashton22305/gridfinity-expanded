@@ -387,8 +387,11 @@ function buildCavityManifold(
   if (filletR > 0) {
     const inset = opened.offset(-filletR, 'Miter', 2);
     if (!inset.isEmpty()) {
+      // Put a seed face exactly on the fillet-to-column junction. Centering the
+      // thin seed across that plane makes the tessellated sphere interpolate
+      // between two equators, leaving a hairline recessed shelf at the join.
       const sweepSeed = inset.extrude(CSG_EPSILON)
-        .translate([0, 0, floorZ + filletR - CSG_EPSILON / 2]);
+        .translate([0, 0, floorZ + filletR]);
       const swept = sweepSeed.minkowskiSum(wasm.Manifold.sphere(filletR, FILLET_SEGMENTS));
       const cavityClip = cavityCS.extrude(filletR + CSG_EPSILON)
         .translate([0, 0, floorZ]);
