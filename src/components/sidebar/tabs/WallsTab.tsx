@@ -154,7 +154,7 @@ type Gesture =
       line: number;
       startCell: number; endCell: number;
     }
-  | { kind: 'free'; draft: Draft };
+  | { kind: 'free'; draft: Draft; cursor: Pt };
 
 /** Shared width for the compact wall width/height number fields. */
 const WALL_DIMENSION_INPUT_WIDTH = 56;
@@ -359,7 +359,11 @@ export function WallsTab() {
       setGesture({ kind: 'pending', start: p, edgeHit, wallHit });
     } else if (insideBins(p)) {
       const s = snapPoint(p, innerWalls);
-      setGesture({ kind: 'free', draft: { x1: s.x, y1: s.y, x2: s.x, y2: s.y } });
+      setGesture({
+        kind: 'free',
+        draft: { x1: s.x, y1: s.y, x2: s.x, y2: s.y },
+        cursor: p,
+      });
       setSelectedWall(null);
     } else {
       // Presses outside the bins' footprint start nothing.
@@ -400,6 +404,7 @@ export function WallsTab() {
         setGesture({
           kind: 'free',
           draft: { x1: s.x, y1: s.y, x2: c.x, y2: c.y },
+          cursor: p,
         });
       }
       setSelectedWall(null);
@@ -413,6 +418,7 @@ export function WallsTab() {
       setGesture({
         ...gesture,
         draft: { ...draft, x2: c.x, y2: c.y },
+        cursor: p,
       });
     }
   }
@@ -428,7 +434,9 @@ export function WallsTab() {
         const { edge, layer } = gesture.edgeHit;
         if (layer === 'perimeter') {
           updateConfig({ openEdges: toggleEdge(openEdges, edge) });
-        } else {
+        } else if (activeKeys(layer).has(edgeKey(edge))) {
+          // Clicking can remove an existing divider, but creating one on an
+          // empty grid line requires a deliberate drag.
           updateConfig({ dividerEdges: toggleEdge(dividerEdges, edge) });
         }
       }
@@ -472,15 +480,16 @@ export function WallsTab() {
       : (gridGesture.adding ? 'edge-line--divider' : 'edge-line--ghost')
     : '';
   const draft = gesture?.kind === 'free' ? gesture.draft : null;
+  const draftCursor = gesture?.kind === 'free' ? gesture.cursor : null;
 
   return (
     <Stack className="no-select" gap="sm">
       <Hint>
-        Click a grid edge to toggle it, or drag along a grid line to paint
-        several: outer edges open the wall, inner edges add dividers. Drag
-        anywhere else to draw a custom wall — endpoints snap to grid lines,
-        intersections, and existing walls. Click a custom wall to select it;
-        Delete removes it.
+        Click an outer wall to open it or an existing divider to remove it.
+        Drag along a grid line to paint several edges, including new dividers.
+        Drag anywhere else to draw a custom wall — endpoints snap to grid
+        lines, intersections, and existing walls. Click a custom wall to
+        select it; Delete removes it.
       </Hint>
       <EditorCanvas
         ref={svgRef}
@@ -531,6 +540,12 @@ export function WallsTab() {
               className="custom-wall-endpoint"
               cx={mmToSvg(draft.x2)} cy={mmToSvg(draft.y2)} r={4}
             />
+            {draftCursor && (
+              <circle
+                className="custom-wall-cursor"
+                cx={mmToSvg(draftCursor.x)} cy={mmToSvg(draftCursor.y)} r={3}
+              />
+            )}
           </g>
         )}
       </EditorCanvas>
