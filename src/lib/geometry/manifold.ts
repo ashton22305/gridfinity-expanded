@@ -1,15 +1,6 @@
-// Manifold engine bridge.
-//
-// The generator authors solids and 2D profiles with @jscad/modeling, but hands
-// every boolean and inward offset to manifold-3d (a Clipper2 + robust-CSG WASM
-// library) so the exported mesh is guaranteed watertight and 2-manifold. This
-// module is the seam between the two: WASM init plus JSCAD → manifold adapters.
+// Manifold engine initialization and output mesh repair boundary.
 import Module from 'manifold-3d';
-import type { ManifoldToplevel, Manifold, CrossSection } from 'manifold-3d';
-import { geometries } from '@jscad/modeling';
-
-type Geom3 = Parameters<typeof geometries.geom3.toPolygons>[0];
-type Geom2 = Parameters<typeof geometries.geom2.toOutlines>[0];
+import type { ManifoldToplevel, Manifold } from 'manifold-3d';
 
 export interface BinMesh {
   vertProperties: Float32Array;  // flat xyz, 3 per vertex
@@ -33,47 +24,6 @@ export function initManifold(locateWasm?: () => string): Promise<ManifoldTopleve
   return cached;
 }
 
-// Weld tolerance for indexing: 1e-5 mm. JSCAD emits per-face vertex copies, so
-// coincident positions must be fused into shared indices for the mesh to import
-// as a manifold. Each primitive fed here is an individually closed solid.
-const WELD = 1e5;
-
-/** Adapts a JSCAD solid (any closed primitive) into a manifold `Manifold`. */
-export function geom3ToManifold(wasm: ManifoldToplevel, geom: Geom3): Manifold {
-  const polygons = geometries.geom3.toPolygons(geom);
-  const index = new Map<string, number>();
-  const vertProperties: number[] = [];
-  const triVerts: number[] = [];
-
-  const idOf = (p: readonly number[]): number => {
-    const key = `${Math.round(p[0] * WELD)},${Math.round(p[1] * WELD)},${Math.round(p[2] * WELD)}`;
-    let id = index.get(key);
-    if (id === undefined) {
-      id = vertProperties.length / 3;
-      index.set(key, id);
-      vertProperties.push(p[0], p[1], p[2]);
-    }
-    return id;
-  };
-
-  for (const poly of polygons) {
-    const ring = poly.vertices.map(idOf);
-    for (let i = 1; i < ring.length - 1; i++) triVerts.push(ring[0], ring[i], ring[i + 1]);  // fan
-  }
-
-  return new wasm.Manifold(new wasm.Mesh({
-    numProp: 3,
-    vertProperties: new Float32Array(vertProperties),
-    triVerts: new Uint32Array(triVerts),
-  }));
-}
-
-/** Adapts a JSCAD 2D profile (outer contour plus any holes) into a `CrossSection`. */
-export function geom2ToCrossSection(wasm: ManifoldToplevel, geom: Geom2): CrossSection {
-  const outlines = geometries.geom2.toOutlines(geom);
-  return new wasm.CrossSection(outlines.map((loop) => loop.map((p) => [p[0], p[1]] as [number, number])));
-}
-
 // Snap grid for the output weld: 1e-3 mm (1 micron). Coarser than the
 // sub-micron near-coincidences a robust boolean leaves where differently-faceted
 // surfaces meet, yet 10x finer than the smallest intended feature — so it fuses
@@ -84,8 +34,8 @@ const OUT_WELD = 1e3;
  * Extracts the triangle mesh from a finished `Manifold` and welds
  * exactly-coincident vertices.
  *
- * The tiny CSG overlaps that make the JSCAD-authored solids fuse cleanly leave
- * manifold emitting a handful of duplicated vertices (zero-length edges) and the
+ * Tiny CSG overlaps can leave manifold emitting a handful of duplicated
+ * vertices (zero-length edges) and the
  * zero-area triangles spanning them. Merging those duplicates and dropping the
  * collapsed triangles removes the slivers while preserving the closed manifold —
  * so no slicer flags a degenerate facet or a vertex-welded non-manifold edge.
