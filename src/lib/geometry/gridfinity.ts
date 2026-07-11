@@ -2,7 +2,7 @@ import type { ManifoldToplevel, Manifold, CrossSection } from 'manifold-3d';
 import type { BinConfig, BinSlope, GridCell, InnerWall, SlopeDir } from '../types';
 import { effectiveWalls, edgeInsideCell, cellSet, type EffectiveWalls } from '../edges';
 import { flattenBins, partitionCells } from '../split';
-import { manifoldMesh, type BinMesh } from './manifold';
+import { manifoldMesh, repairMesh, type BinMesh } from './manifold';
 
 // ── Spec constants ─────────────────────────────────────────────────────────────
 // All dimensions in mm. Reference: kennetek/gridfinity-rebuilt-openscad
@@ -33,14 +33,9 @@ const OUTER_R = PEG_R_TOP;
 export const FLOOR_THICKNESS = 1.2;
 
 // Floor fillet: concave quarter-circle at the cavity floor-to-wall junction.
-// Uses stacked extrude prisms rather than hull() — hull fills concave notches
-// on non-rectangular (L, T, staircase) bins, which punches a hole on subtract.
-// Radius comes from config (innerFilletRadius); resolution scales with it.
-const FILLET_STEPS_PER_MM = 24;
-
-function filletSteps(r: number): number {
-  return Math.min(48, Math.max(4, Math.ceil(r * FILLET_STEPS_PER_MM)));
-}
+// A geodesic sphere sweeps an inset 2D cavity profile to form the continuous
+// round. This avoids the visible horizontal terraces produced by stacked slabs.
+const FILLET_SEGMENTS = 32;
 
 /** Clamp the configured fillet radius so it never exceeds the cavity depth. */
 function clampFilletR(requested: number, totalHeight: number): number {
@@ -348,17 +343,17 @@ function clampOpeningRadius(ext: CrossSection, rc: number): number {
 
 /**
  * Cavity solid (or null when the plan leaves no cavity, e.g. a wall thicker
- * than the cell): a stack of concave-fillet prisms (floorZ → floorZ+filletR)
- * capped by the straight column, which pokes CSG_EPSILON past the rim so the
- * top cut opens cleanly.
+ * than the cell): a spherical sweep forms the continuous concave floor fillet
+ * (floorZ → floorZ+filletR), capped by the straight column, which pokes
+ * CSG_EPSILON past the rim so the top cut opens cleanly.
  *
  * Both the corner rounding (a morphological opening) and the fillet insets
  * operate on the cavity EXTENDED through its open faces, then intersect back
  * to the real cavity: otherwise they would retreat from open/seam faces too,
  * growing ribs and floor bumps right where split pieces are glued together.
- * The opening is anti-extensive and erosions nest as insets shrink, so the
- * intersection preserves both "never breach a wall" and the CLAUDE.md
- * containment invariant (every prism sits inside the step above it).
+ * The final intersection preserves the "never breach a wall" invariant. The
+ * sweep is a native 3D Minkowski sum, so its quarter-circle profile is made of
+ * connected sloped facets instead of disconnected horizontal stair steps.
  */
 function buildCavityManifold(
   wasm: ManifoldToplevel, plan: CavityPlan, rc: number, filletR: number, totalHeight: number,
@@ -388,25 +383,24 @@ function buildCavityManifold(
   }
 
   const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
-  const steps = filletR > 0 ? filletSteps(filletR) : 0;
-  const stepH = steps > 0 ? filletR / steps : 0;
   const solids: Manifold[] = [];
-  for (let i = 0; i < steps; i++) {
-    const t = (i + 0.5) / steps;
-    const inset = filletR * (1 - Math.sqrt(Math.max(0, 2 * t - t * t)));
-    const cs = inset > 0.001
-      ? opened.offset(-inset, 'Miter', 2).intersect(cavityCS)
-      : cavityCS;
-    // Skipping empty steps is safe: insets shrink monotonically with i, so
-    // skips only ever drop the bottom of the stack (thin cavity regions get a
-    // shallower fillet) and every surviving prism still overshoots CSG_EPSILON
-    // into the strictly-larger step above.
-    if (cs.isEmpty()) continue;
-    solids.push(cs.extrude(stepH + CSG_EPSILON).translate([0, 0, floorZ + i * stepH]));
+  if (filletR > 0) {
+    const inset = opened.offset(-filletR, 'Miter', 2);
+    if (!inset.isEmpty()) {
+      // Put a seed face exactly on the fillet-to-column junction. Centering the
+      // thin seed across that plane makes the tessellated sphere interpolate
+      // between two equators, leaving a hairline recessed shelf at the join.
+      const sweepSeed = inset.extrude(CSG_EPSILON)
+        .translate([0, 0, floorZ + filletR]);
+      const swept = sweepSeed.minkowskiSum(wasm.Manifold.sphere(filletR, FILLET_SEGMENTS));
+      const cavityClip = cavityCS.extrude(filletR + CSG_EPSILON)
+        .translate([0, 0, floorZ]);
+      solids.push(swept.intersect(cavityClip));
+    }
   }
-  solids.push(
-    cavityCS.extrude(totalHeight - floorZ - filletR + CSG_EPSILON).translate([0, 0, floorZ + filletR]),
-  );
+  solids.push(cavityCS
+    .extrude(totalHeight - floorZ - filletR + CSG_EPSILON)
+    .translate([0, 0, floorZ + filletR]));
   return { solid: wasm.Manifold.union(solids), cs: cavityCS };
 }
 
@@ -625,7 +619,7 @@ function mirrorMeshY(mesh: BinMesh, offset: number): BinMesh {
     tv[i + 1] = mesh.triVerts[i + 2];
     tv[i + 2] = mesh.triVerts[i + 1];
   }
-  return { vertProperties: vp, triVerts: tv };
+  return repairMesh({ vertProperties: vp, triVerts: tv });
 }
 
 function concatMeshes(meshes: BinMesh[]): BinMesh {

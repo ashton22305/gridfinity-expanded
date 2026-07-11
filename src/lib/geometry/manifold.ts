@@ -42,6 +42,14 @@ const OUT_WELD = 1e3;
  */
 export function manifoldMesh(manifold: Manifold): BinMesh {
   const mesh = manifold.getMesh();
+  return repairMesh({
+    vertProperties: new Float32Array(mesh.vertProperties),
+    triVerts: new Uint32Array(mesh.triVerts),
+  });
+}
+
+/** Weld and repair a mesh after any coordinate transform or float32 write. */
+export function repairMesh(mesh: BinMesh): BinMesh {
   const src = mesh.vertProperties;
   const srcTris = mesh.triVerts;
 
@@ -52,7 +60,14 @@ export function manifoldMesh(manifold: Manifold): BinMesh {
     const x = src[v * 3], y = src[v * 3 + 1], z = src[v * 3 + 2];
     const key = `${Math.round(x * OUT_WELD)},${Math.round(y * OUT_WELD)},${Math.round(z * OUT_WELD)}`;
     let id = index.get(key);
-    if (id === undefined) { id = out.length / 3; index.set(key, id); out.push(x, y, z); }
+    if (id === undefined) {
+      id = out.length / 3;
+      index.set(key, id);
+      // Repair against the same precision callers receive. A triangle that is
+      // valid in WASM's float64 mesh can collapse only after Float32Array
+      // conversion, which is too late for repairDegenerateTris to see it.
+      out.push(Math.fround(x), Math.fround(y), Math.fround(z));
+    }
     remap[v] = id;
   }
 
@@ -89,7 +104,9 @@ function repairDegenerateTris(vp: number[], tris: number[]): number[] {
     return dx*dx + dy*dy + dz*dz;
   };
 
-  for (let iter = 0; iter < 8; iter++) {
+  // Each rewrite changes edge adjacency, so rebuild the map after every repair
+  // instead of applying later rewrites against stale topology.
+  for (let iter = 0; iter < 256; iter++) {
     const edgeOwner = new Map<string, number>();
     for (let t = 0; t < tris.length / 3; t++) {
       for (let e = 0; e < 3; e++) {
@@ -125,6 +142,7 @@ function repairDegenerateTris(vp: number[], tris: number[]): number[] {
       tris.push(m, u, x);
       dead.add(t);
       changed = true;
+      break;
     }
 
     if (dead.size) {

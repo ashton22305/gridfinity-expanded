@@ -22,7 +22,7 @@ Use Mantine controls and layout primitives before custom UI. Put cross-app contr
 
 Tabs read and write through `useAppStore()`. Bin-owned state must go through `updateBin()` so automatic split lines remain effective. Keep `BinConfig` plain and structured-clone compatible for worker messages.
 
-The manifold path (`generateBinPieces()` / `generateBinManifold()`) is the production geometry path. Author geometry with native `manifold-3d` `CrossSection` and `Manifold` operations. Preserve `manifoldMesh()` in the export path because it welds vertices and repairs float32-degenerate slivers.
+The manifold path (`generateBinPieces()` / `generateBinManifold()`) is the production geometry path. Author geometry with native `manifold-3d` `CrossSection` and `Manifold` operations. Preserve `manifoldMesh()` and final-coordinate `repairMesh()` calls in the export path because they weld vertices and repair float32-degenerate slivers after mesh generation or coordinate transforms.
 
 The editors map SVG y downward to mm +y, so generated output is mirrored across Y at the geometry boundary. Do not compensate for orientation in the viewer. Split seam edges are open unless a divider lies on the seam. Combine solids with manifold booleans, use `CrossSection.offset` for inward 2D offsets, feed manifold individually closed primitives, and use a small overlap such as `CSG_EPSILON` where non-identical flush coordinates could create membranes.
 
@@ -63,6 +63,8 @@ When a changed path is not safely recognized, classify it conservatively. Keep d
 Create a dedicated feature branch in a new Git worktree based on the latest `origin/main`, and make changes in that worktree rather than directly on `main`. Open pull requests with `main` as the target branch.
 
 Use short, imperative commit subjects. Pull requests should describe user-visible changes, list validation commands, link related issues, and include screenshots or recordings for UI changes. For geometry or export changes, call out printability and manifold implications.
+
+Use `--body-file` for multiline `gh` pull-request bodies and comments. Do not embed escaped `\\n` sequences in shell arguments because GitHub renders them as literal text.
 
 ## Known Limitations
 

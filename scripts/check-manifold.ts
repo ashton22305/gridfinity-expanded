@@ -219,6 +219,7 @@ const cases: { name: string; config: LegacyConfig }[] = [
   { name: '2x2 fillet0',         config: { ...base, cells: rect(2, 2), innerFilletRadius: 0 } },
   { name: '2x2 fillet3',         config: { ...base, cells: rect(2, 2), innerFilletRadius: 3 } },
   { name: 'L-shape fillet2',     config: { ...base, cells: L, innerFilletRadius: 2 } },
+  { name: 'L open fillet6',      config: { ...base, cells: L, innerFilletRadius: 6, openEdges: [v(1, 1)] } },
   { name: '1x1 h1 fillet3',      config: { ...base, cells: rect(1, 1), heightUnits: 1, innerFilletRadius: 3 } },
   { name: 'thickwall fillet3',   config: { ...base, cells: rect(1, 1), wallThickness: 4, innerFilletRadius: 3 } },
   { name: 'empty (unit cube)',   config: { ...base, cells: [] } },
