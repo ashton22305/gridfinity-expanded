@@ -90,11 +90,9 @@
   stroke-linecap: round;
 }
 
-/* Free-walls mode: the whole canvas is a drawing surface. */
-.editor-svg--free {
-  cursor: crosshair;
-}
-.editor-svg--free .edge {
+/* The walls canvas is a drawing surface everywhere; edges keep their own
+   pointer cursor so the toggle affordance still reads. */
+.editor-svg--walls {
   cursor: crosshair;
 }
 

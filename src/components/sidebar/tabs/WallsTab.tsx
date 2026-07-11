@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Button, Checkbox, CloseButton, Group, NumberInput, Paper, SegmentedControl, Stack, Text,
+  Button, Checkbox, CloseButton, Group, NumberInput, Paper, Stack, Text,
 } from '@mantine/core';
 import type { GridEdge, InnerWall } from '../../../lib/types';
 import {
@@ -13,25 +13,97 @@ import { EditorCanvas } from '../EditorCanvas';
 import { CELL, gridToSvg, mmToSvg, pointerToMm } from '../editorCoords';
 import { Hint, Label } from '../../ui/Field';
 
+interface Pt { x: number; y: number }
+
 const snapMm = (mm: number) => Math.round(mm * 2) / 2;
 
-// Drawing aids: endpoints magnetize to grid lines within GRID_SNAP_MM, and the
-// segment locks to 45° increments when the drag is within ANGLE_SNAP_DEG of one.
+// Drawing aids: endpoints magnetize to grid lines, grid intersections, and
+// existing custom walls within GRID_SNAP_MM, and the segment locks to 45°
+// increments when the drag is within ANGLE_SNAP_RAD of one.
 const GRID_SNAP_MM = 3;
 const ANGLE_SNAP_RAD = (7 * Math.PI) / 180;
 
-// Max perpendicular distance (mm) from the pointer to a grid line for a drag
-// in grid mode to pick up the edge on that line.
+// Max perpendicular distance (mm) from the pointer to a grid line for a press
+// to pick up the edge on that line.
 const EDGE_PICK_MM = 8;
+// Max distance (mm) from the pointer to a custom wall for a click to select it.
+const WALL_PICK_MM = 4;
+// Pointer travel (mm) before a pending press commits to a drag gesture.
+const MOVE_THRESHOLD_MM = 2.5;
 
 function gridSnap(mm: number): number {
   const line = Math.round(mm / GRID_PITCH) * GRID_PITCH;
   return Math.abs(mm - line) <= GRID_SNAP_MM ? line : snapMm(mm);
 }
 
-/** Endpoint for a draft from (x1,y1) toward p, with grid + 45° snapping. */
-function snapEnd(x1: number, y1: number, p: { x: number; y: number }): { x2: number; y2: number } {
-  let x = gridSnap(p.x), y = gridSnap(p.y);
+/** Closest point to p on segment w, with its distance. */
+function closestOnWall(p: Pt, w: InnerWall): { x: number; y: number; dist: number } {
+  const dx = w.x2 - w.x1, dy = w.y2 - w.y1;
+  const lenSq = dx * dx + dy * dy;
+  const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - w.x1) * dx + (p.y - w.y1) * dy) / lenSq));
+  const x = w.x1 + t * dx, y = w.y1 + t * dy;
+  return { x, y, dist: Math.hypot(p.x - x, p.y - y) };
+}
+
+/** Index of the custom wall within WALL_PICK_MM of p, or null. */
+function nearestWall(p: Pt, walls: InnerWall[]): number | null {
+  let best: number | null = null;
+  let bestDist = WALL_PICK_MM;
+  walls.forEach((w, i) => {
+    const { dist } = closestOnWall(p, w);
+    if (dist <= bestDist) {
+      best = i;
+      bestDist = dist;
+    }
+  });
+  return best;
+}
+
+/**
+ * Point snap tier: custom-wall endpoints and grid intersections within
+ * GRID_SNAP_MM of p, nearest first. These beat line and 45° snaps so free
+ * walls join cleanly at corners and existing wall ends.
+ */
+function pointSnap(p: Pt, walls: InnerWall[]): Pt | null {
+  const candidates: Pt[] = walls.flatMap((w) => [
+    { x: w.x1, y: w.y1 },
+    { x: w.x2, y: w.y2 },
+  ]);
+  const ix = Math.round(p.x / GRID_PITCH) * GRID_PITCH;
+  const iy = Math.round(p.y / GRID_PITCH) * GRID_PITCH;
+  if (Math.abs(p.x - ix) <= GRID_SNAP_MM && Math.abs(p.y - iy) <= GRID_SNAP_MM) {
+    candidates.push({ x: ix, y: iy });
+  }
+  let best: Pt | null = null;
+  let bestDist = GRID_SNAP_MM;
+  for (const c of candidates) {
+    const dist = Math.hypot(p.x - c.x, p.y - c.y);
+    if (dist <= bestDist) {
+      best = c;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+/** Snap a raw mm point: wall endpoints & grid intersections beat line snaps. */
+function snapPoint(p: Pt, walls: InnerWall[]): Pt {
+  const pt = pointSnap(p, walls);
+  if (pt) return pt;
+  let best: { x: number; y: number; dist: number } | null = null;
+  for (const w of walls) {
+    const c = closestOnWall(p, w);
+    if (c.dist <= GRID_SNAP_MM && (!best || c.dist < best.dist)) best = c;
+  }
+  if (best) return { x: snapMm(best.x), y: snapMm(best.y) };
+  return { x: gridSnap(p.x), y: gridSnap(p.y) };
+}
+
+/** Endpoint for a draft from (x1,y1) toward p, with point, grid + 45° snapping. */
+function snapEnd(x1: number, y1: number, p: Pt, walls: InnerWall[]): { x2: number; y2: number } {
+  const pt = pointSnap(p, walls);
+  if (pt) return { x2: pt.x, y2: pt.y };
+  let { x, y } = snapPoint(p, walls);
   const dx = x - x1, dy = y - y1;
   if (Math.hypot(dx, dy) < 2) return { x2: x, y2: y };
   const step = Math.PI / 4;
@@ -59,14 +131,27 @@ function edgeEndpoints(e: GridEdge): { x1: number; y1: number; x2: number; y2: n
 interface Draft { x1: number; y1: number; x2: number; y2: number }
 
 type EdgeLayer = 'perimeter' | 'internal';
-type Mode = 'grid' | 'free';
 
-interface GridDrag {
-  layer: EdgeLayer;
-  /** true = drag makes edges active (open / divider), false = drag clears them */
-  adding: boolean;
-  edges: Map<string, GridEdge>;
-}
+interface EdgeHit { edge: GridEdge; layer: EdgeLayer }
+
+/**
+ * One pointer gesture on the canvas. A press starts 'pending' when it lands on
+ * a grid edge or custom wall; the first significant move decides what it is.
+ * A grid drag is locked to one grid line — changing direction requires a
+ * release and a new press.
+ */
+type Gesture =
+  | { kind: 'pending'; start: Pt; edgeHit: EdgeHit | null; wallHit: number | null }
+  | {
+      kind: 'grid'; layer: EdgeLayer;
+      /** true = drag makes edges active (open / divider), false = drag clears them */
+      adding: boolean;
+      orientation: 'h' | 'v';
+      /** locked grid-line index; the drag can only extend along this line */
+      line: number;
+      startCell: number; endCell: number;
+    }
+  | { kind: 'free'; draft: Draft };
 
 /** Shared width for the compact wall width/height number fields. */
 const WALL_DIMENSION_INPUT_WIDTH = 56;
@@ -83,9 +168,7 @@ export function WallsTab() {
   const { openEdges, dividerEdges, innerWalls } = config;
   const cells = flattenBins(config.bins);
   const svgRef = useRef<SVGSVGElement>(null);
-  const [mode, setMode] = useState<Mode>('grid');
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [gridDrag, setGridDrag] = useState<GridDrag | null>(null);
+  const [gesture, setGesture] = useState<Gesture | null>(null);
   const [selectedWall, setSelectedWall] = useState<number | null>(null);
 
   const hasOverrides = openEdges.length > 0 || dividerEdges.length > 0;
@@ -105,11 +188,11 @@ export function WallsTab() {
     return { perimeter, internal };
   }, [config.bins]);
 
-  // Rendered edge overlay. Memoized so per-pointer-move renders (grid-drag and
-  // free-draft state change on every move) don't reconcile the whole edge
-  // layer. Perimeter edges toggle openEdges; internal toggle dividerEdges.
-  // Toggling happens through the SVG-level grid-drag handlers, so edges carry
-  // no click handlers of their own — the hit line only provides hover/cursor.
+  // Rendered edge overlay. Memoized so per-pointer-move renders (the gesture
+  // state changes on every move) don't reconcile the whole edge layer.
+  // Perimeter edges toggle openEdges; internal toggle dividerEdges. Toggling
+  // happens through the SVG-level gesture handlers, so edges carry no click
+  // handlers of their own — the hit line only provides hover/cursor.
   const edgeElements = useMemo(() => {
     const layers = [
       {
@@ -160,12 +243,12 @@ export function WallsTab() {
     return <Hint>Select cells in the Shape tab first.</Hint>;
   }
 
-  function svgPoint(e: React.PointerEvent): { x: number; y: number } {
+  function svgPoint(e: React.PointerEvent): Pt {
     return pointerToMm(svgRef.current!, e);
   }
 
   /** Nearest existing grid edge within EDGE_PICK_MM of a whole-bin mm point. */
-  function nearestEdge(p: { x: number; y: number }): { edge: GridEdge; layer: EdgeLayer } | null {
+  function nearestEdge(p: Pt): EdgeHit | null {
     const gx = p.x / GRID_PITCH, gy = p.y / GRID_PITCH;
     const candidates: Array<{ edge: GridEdge; dist: number }> = [
       {
@@ -186,70 +269,134 @@ export function WallsTab() {
     return null;
   }
 
-  // ── Grid mode: drag along grid lines paints/clears edges ──
-  // Pencil semantics: the first edge touched decides the direction (activate
-  // or clear), and the drag only collects edges whose state would change.
-  function startGridDrag(e: React.PointerEvent) {
-    const hit = nearestEdge(svgPoint(e));
-    if (!hit) return;
-    const activeSet = hit.layer === 'perimeter'
-      ? new Set(openEdges.map(edgeKey))
-      : new Set(dividerEdges.map(edgeKey));
-    const adding = !activeSet.has(edgeKey(hit.edge));
-    setGridDrag({ layer: hit.layer, adding, edges: new Map([[edgeKey(hit.edge), hit.edge]]) });
-    setSelectedWall(null);
-    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+  function activeKeys(layer: EdgeLayer): Set<string> {
+    return new Set((layer === 'perimeter' ? openEdges : dividerEdges).map(edgeKey));
   }
 
-  function moveGridDrag(e: React.PointerEvent) {
-    if (!gridDrag) return;
-    const hit = nearestEdge(svgPoint(e));
-    if (!hit || hit.layer !== gridDrag.layer) return;
-    const key = edgeKey(hit.edge);
-    if (gridDrag.edges.has(key)) return;
-    const activeSet = gridDrag.layer === 'perimeter'
-      ? new Set(openEdges.map(edgeKey))
-      : new Set(dividerEdges.map(edgeKey));
-    if (activeSet.has(key) === gridDrag.adding) return; // already in target state
-    setGridDrag({ ...gridDrag, edges: new Map(gridDrag.edges).set(key, hit.edge) });
+  /** The cell index of a whole-bin mm point along a grid line's axis. */
+  function cellAlong(p: Pt, orientation: 'h' | 'v'): number {
+    const along = orientation === 'h' ? p.x : p.y;
+    const max = (orientation === 'h' ? gridCols : gridRows) - 1;
+    return Math.max(0, Math.min(max, Math.floor(along / GRID_PITCH)));
   }
 
-  function endGridDrag() {
-    if (!gridDrag) return;
-    const toggled = [...gridDrag.edges.values()];
-    if (toggled.length > 0) {
-      if (gridDrag.layer === 'perimeter') {
-        updateConfig({ openEdges: toggled.reduce(toggleEdge, openEdges) });
-      } else {
-        updateConfig({ dividerEdges: toggled.reduce(toggleEdge, dividerEdges) });
-      }
+  /**
+   * Edges a grid drag would toggle: the contiguous span between startCell and
+   * endCell on the locked line, restricted to edges that exist on the drag's
+   * layer and whose state would actually change. Derived from the span each
+   * move, so fast drags can't skip edges and backing up shrinks the preview.
+   */
+  function spanEdges(g: Extract<Gesture, { kind: 'grid' }>): GridEdge[] {
+    const map = g.layer === 'perimeter' ? perimeter : internal;
+    const active = activeKeys(g.layer);
+    const lo = Math.min(g.startCell, g.endCell);
+    const hi = Math.max(g.startCell, g.endCell);
+    const out: GridEdge[] = [];
+    for (let c = lo; c <= hi; c++) {
+      const e: GridEdge = g.orientation === 'h'
+        ? { x: c, y: g.line, orientation: 'h' }
+        : { x: g.line, y: c, orientation: 'v' };
+      const key = edgeKey(e);
+      if (!map.has(key)) continue;
+      if (active.has(key) === g.adding) continue; // already in target state
+      out.push(map.get(key)!);
     }
-    setGridDrag(null);
+    return out;
   }
 
-  // ── Free mode: drag draws a custom wall at any angle ──
-  function startDraw(e: React.PointerEvent) {
+  function down(e: React.PointerEvent) {
     const p = svgPoint(e);
-    const x = gridSnap(p.x), y = gridSnap(p.y);
-    setDraft({ x1: x, y1: y, x2: x, y2: y });
-    setSelectedWall(null);
+    const edgeHit = nearestEdge(p);
+    const wallHit = nearestWall(p, innerWalls);
+    if (edgeHit || wallHit != null) {
+      // Wait for movement (or release) to decide what this press means.
+      setGesture({ kind: 'pending', start: p, edgeHit, wallHit });
+    } else {
+      const s = snapPoint(p, innerWalls);
+      setGesture({ kind: 'free', draft: { x1: s.x, y1: s.y, x2: s.x, y2: s.y } });
+      setSelectedWall(null);
+    }
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
   }
 
-  function moveDraw(e: React.PointerEvent) {
-    if (!draft) return;
-    setDraft({ ...draft, ...snapEnd(draft.x1, draft.y1, svgPoint(e)) });
-  }
-
-  function endDraw() {
-    if (!draft) return;
-    const length = Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1);
-    if (length >= 5) {
-      updateConfig({
-        innerWalls: [...innerWalls, { ...draft, width: 1.2, height: null }],
+  function move(e: React.PointerEvent) {
+    if (!gesture) return;
+    const p = svgPoint(e);
+    if (gesture.kind === 'pending') {
+      const dx = p.x - gesture.start.x, dy = p.y - gesture.start.y;
+      if (Math.hypot(dx, dy) < MOVE_THRESHOLD_MM) return;
+      // "Along the line" is strict (within ~27°) so a clearly diagonal drag
+      // that happens to start on a grid edge still draws a free wall.
+      const hit = gesture.edgeHit;
+      const alongEdge = hit != null && (hit.edge.orientation === 'h'
+        ? Math.abs(dx) >= 2 * Math.abs(dy)
+        : Math.abs(dy) >= 2 * Math.abs(dx));
+      if (hit && alongEdge) {
+        // Pencil semantics: the first edge decides activate vs clear.
+        const orientation = hit.edge.orientation;
+        setGesture({
+          kind: 'grid',
+          layer: hit.layer,
+          adding: !activeKeys(hit.layer).has(edgeKey(hit.edge)),
+          orientation,
+          line: orientation === 'h' ? hit.edge.y : hit.edge.x,
+          startCell: orientation === 'h' ? hit.edge.x : hit.edge.y,
+          endCell: cellAlong(p, orientation),
+        });
+      } else {
+        const s = snapPoint(gesture.start, innerWalls);
+        setGesture({
+          kind: 'free',
+          draft: { x1: s.x, y1: s.y, ...snapEnd(s.x, s.y, p, innerWalls) },
+        });
+      }
+      setSelectedWall(null);
+    } else if (gesture.kind === 'grid') {
+      const endCell = cellAlong(p, gesture.orientation);
+      if (endCell !== gesture.endCell) setGesture({ ...gesture, endCell });
+    } else {
+      const { draft } = gesture;
+      setGesture({
+        ...gesture,
+        draft: { ...draft, ...snapEnd(draft.x1, draft.y1, p, innerWalls) },
       });
     }
-    setDraft(null);
+  }
+
+  function up() {
+    if (!gesture) return;
+    if (gesture.kind === 'pending') {
+      // A plain click: select the wall under the pointer, else toggle the edge.
+      if (gesture.wallHit != null) {
+        const i = gesture.wallHit;
+        setSelectedWall((s) => (s === i ? null : i));
+      } else if (gesture.edgeHit) {
+        const { edge, layer } = gesture.edgeHit;
+        if (layer === 'perimeter') {
+          updateConfig({ openEdges: toggleEdge(openEdges, edge) });
+        } else {
+          updateConfig({ dividerEdges: toggleEdge(dividerEdges, edge) });
+        }
+      }
+    } else if (gesture.kind === 'grid') {
+      const toggled = spanEdges(gesture);
+      if (toggled.length > 0) {
+        if (gesture.layer === 'perimeter') {
+          updateConfig({ openEdges: toggled.reduce(toggleEdge, openEdges) });
+        } else {
+          updateConfig({ dividerEdges: toggled.reduce(toggleEdge, dividerEdges) });
+        }
+      }
+    } else {
+      const { draft } = gesture;
+      const length = Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1);
+      if (length >= 5) {
+        updateConfig({
+          innerWalls: [...innerWalls, { ...draft, width: 1.2, height: null }],
+        });
+      }
+    }
+    setGesture(null);
   }
 
   function updateWall(i: number, patch: Partial<InnerWall>) {
@@ -260,56 +407,39 @@ export function WallsTab() {
 
   function removeWall(i: number) {
     updateConfig({ innerWalls: innerWalls.filter((_, j) => j !== i) });
-    setSelectedWall((s) => (s === i ? null : s));
+    setSelectedWall((s) => (s == null || s < i ? s : s === i ? null : s - 1));
   }
 
   // The grid-drag preview mirrors the class of the state the edge will end in.
-  const previewClass = gridDrag
-    ? gridDrag.layer === 'perimeter'
-      ? (gridDrag.adding ? 'edge-line--open' : 'edge-line--wall')
-      : (gridDrag.adding ? 'edge-line--divider' : 'edge-line--ghost')
+  const gridGesture = gesture?.kind === 'grid' ? gesture : null;
+  const previewClass = gridGesture
+    ? gridGesture.layer === 'perimeter'
+      ? (gridGesture.adding ? 'edge-line--open' : 'edge-line--wall')
+      : (gridGesture.adding ? 'edge-line--divider' : 'edge-line--ghost')
     : '';
-
-  const grid = mode === 'grid';
+  const draft = gesture?.kind === 'free' ? gesture.draft : null;
 
   return (
     <Stack className="no-select" gap="sm">
-      <SegmentedControl
-        value={mode}
-        onChange={(v) => setMode(v as Mode)}
-        data={[
-          { value: 'grid', label: 'Grid walls' },
-          { value: 'free', label: 'Free walls' },
-        ]}
-      />
       <Hint>
-        {grid
-          ? 'Click or drag along grid lines: outer edges open/close the wall, ' +
-            'inner edges add dividers. The first edge sets whether a drag adds or clears.'
-          : 'Drag inside a bin to draw a custom wall at any angle — endpoints snap ' +
-            'to grid lines, and the wall snaps near 45° increments. Click a wall to ' +
-            'select it; Delete removes it.'}
+        Click a grid edge to toggle it, or drag along a grid line to paint
+        several: outer edges open the wall, inner edges add dividers. Drag
+        anywhere else to draw a custom wall — endpoints snap to grid lines,
+        intersections, and existing walls. Click a custom wall to select it;
+        Delete removes it.
       </Hint>
       <EditorCanvas
         ref={svgRef}
-        className={`editor-svg editor-svg--${mode}`}
+        className="editor-svg editor-svg--walls"
         gridCols={gridCols}
         gridRows={gridRows}
         cells={cells}
-        onPointerDown={grid ? startGridDrag : undefined}
-        onPointerMove={grid ? moveGridDrag : moveDraw}
-        onPointerUp={grid ? endGridDrag : endDraw}
+        onPointerDown={down}
+        onPointerMove={move}
+        onPointerUp={up}
       >
-        {/* invisible catcher for free-wall drawing; edges render above it */}
-        {!grid && (
-          <rect
-            width="100%" height="100%"
-            fill="transparent"
-            onPointerDown={startDraw}
-          />
-        )}
         {edgeElements}
-        {gridDrag && [...gridDrag.edges.values()].map((e) => (
+        {gridGesture && spanEdges(gridGesture).map((e) => (
           <line
             key={`p${edgeKey(e)}`}
             {...edgeEndpoints(e)}
@@ -322,14 +452,7 @@ export function WallsTab() {
             x2: mmToSvg(w.x2), y2: mmToSvg(w.y2),
           };
           return (
-            <g
-              key={`w${i}`}
-              className="custom-wall-g"
-              onPointerDown={(ev) => {
-                ev.stopPropagation();
-                setSelectedWall((s) => (s === i ? null : i));
-              }}
-            >
+            <g key={`w${i}`} className="custom-wall-g">
               <line {...p} className="custom-wall-hit" />
               <line
                 {...p}
@@ -421,7 +544,10 @@ export function WallsTab() {
                     })}
                   />
                   <CloseButton
-                    onClick={() => removeWall(i)}
+                    onClick={(e) => {
+                      e.stopPropagation(); // don't re-select via the row's onClick
+                      removeWall(i);
+                    }}
                     aria-label={`Delete wall ${i + 1}`}
                   />
                 </Group>
