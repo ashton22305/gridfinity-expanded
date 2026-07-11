@@ -1,9 +1,8 @@
-import { primitives, booleans, expansions, extrusions, transforms, hulls, measurements } from '@jscad/modeling';
 import type { ManifoldToplevel, Manifold, CrossSection } from 'manifold-3d';
 import type { BinConfig, BinSlope, GridCell, InnerWall, SlopeDir } from '../types';
 import { effectiveWalls, edgeInsideCell, cellSet, type EffectiveWalls } from '../edges';
 import { flattenBins, partitionCells } from '../split';
-import { geom3ToManifold, geom2ToCrossSection, manifoldMesh, type BinMesh } from './manifold';
+import { manifoldMesh, type BinMesh } from './manifold';
 
 // ── Spec constants ─────────────────────────────────────────────────────────────
 // All dimensions in mm. Reference: kennetek/gridfinity-rebuilt-openscad
@@ -112,12 +111,6 @@ function cellBounds(cells: GridCell[]): { minX: number; minY: number; maxX: numb
   };
 }
 
-// ── JSCAD type aliases ─────────────────────────────────────────────────────────
-// expansions.offset() returns the Geometry union type, which breaks JSCAD's
-// overloaded extrudeLinear / hull signatures. Concrete aliases fix inference.
-type Geom2 = ReturnType<typeof primitives.rectangle>;
-type Geom3 = ReturnType<typeof primitives.cuboid>;
-
 const FASTENER_OFFSETS: [number, number][] = [
   [-FASTENER_INSET, -FASTENER_INSET], [-FASTENER_INSET, FASTENER_INSET],
   [ FASTENER_INSET, -FASTENER_INSET], [ FASTENER_INSET, FASTENER_INSET],
@@ -125,30 +118,13 @@ const FASTENER_OFFSETS: [number, number][] = [
 
 // ── 2D / 3D primitives ─────────────────────────────────────────────────────────
 
-/** Unions an array of geometries, including the single-item case JSCAD doesn't handle. */
-function union<T>(items: T[]): T {
-  if (items.length === 1) return items[0];
-  return booleans.union(...(items as any[])) as T;
-}
-
 /** Rounded square centred at (cx, cy). */
-function roundedRect(cx: number, cy: number, w: number, h: number, r: number): Geom2 {
-  if (r <= 0) return primitives.rectangle({ size: [w, h], center: [cx, cy] }) as Geom2;
-  return expansions.offset(
-    { delta: r, corners: 'round', segments: 32 },
-    primitives.rectangle({ size: [w - 2 * r, h - 2 * r], center: [cx, cy] }),
-  ) as Geom2;
-}
-
-/** Thin disc extrusion used as a loft anchor in hull(), sitting just above z. */
-function disc(z: number, profile: Geom2): Geom3 {
-  return transforms.translate([0, 0, z],
-    extrusions.extrudeLinear({ height: CSG_EPSILON }, profile)) as Geom3;
-}
-
-/** Loft anchor whose TOP face lands exactly on z (sits just below it). */
-function discTop(z: number, profile: Geom2): Geom3 {
-  return disc(z - CSG_EPSILON, profile);
+function roundedRect(
+  wasm: ManifoldToplevel, cx: number, cy: number, w: number, h: number, r: number,
+): CrossSection {
+  const core = wasm.CrossSection.square([w - 2 * r, h - 2 * r], true)
+    .translate([cx, cy]);
+  return r <= 0 ? core : core.offset(r, 'Round', 2, 32);
 }
 
 // ── Geometry builders ──────────────────────────────────────────────────────────
@@ -160,38 +136,34 @@ function discTop(z: number, profile: Geom2): Geom3 {
  * sections meet flush at z = PEG_Z1, PEG_Z2 and PEG_HEIGHT: each hull's upper
  * loft anchor is top-aligned to its junction plane so no section overshoots into
  * the next. Flush coincident faces let the robust boolean fuse them without the
- * sub-micron slivers an overlap would leave. (The JSCAD fallback just unions the
- * three; its output is non-manifold regardless.)
+ * sub-micron slivers an overlap would leave.
  */
-function pegSections(cx: number, cy: number): Geom3[] {
-  const bottom = roundedRect(cx, cy, PEG_W_BOTTOM, PEG_W_BOTTOM, PEG_R_BOTTOM);
-  const mid    = roundedRect(cx, cy, PEG_W_MID,    PEG_W_MID,    PEG_R_MID);
-  const top    = roundedRect(cx, cy, PEG_W_TOP,    PEG_W_TOP,    PEG_R_TOP);
+function pegSections(wasm: ManifoldToplevel, cx: number, cy: number): Manifold[] {
+  const bottom = roundedRect(wasm, cx, cy, PEG_W_BOTTOM, PEG_W_BOTTOM, PEG_R_BOTTOM);
+  const mid    = roundedRect(wasm, cx, cy, PEG_W_MID,    PEG_W_MID,    PEG_R_MID);
+  const top    = roundedRect(wasm, cx, cy, PEG_W_TOP,    PEG_W_TOP,    PEG_R_TOP);
+  const loft = (a: CrossSection, z1: number, b: CrossSection, z2: number) =>
+    wasm.Manifold.hull([
+      a.extrude(CSG_EPSILON).translate([0, 0, z1]),
+      b.extrude(CSG_EPSILON).translate([0, 0, z2 - CSG_EPSILON]),
+    ]);
 
   return [
-    hulls.hull(disc(0, bottom), discTop(PEG_Z1, mid)) as Geom3,       // bottom chamfer → [0, PEG_Z1]
-    transforms.translate([0, 0, PEG_Z1],
-      extrusions.extrudeLinear({ height: PEG_Z2 - PEG_Z1 }, mid)) as Geom3,  // vertical wall → [PEG_Z1, PEG_Z2]
-    hulls.hull(disc(PEG_Z2, mid), discTop(PEG_HEIGHT, top)) as Geom3, // upper chamfer → [PEG_Z2, PEG_HEIGHT]
+    loft(bottom, 0, mid, PEG_Z1),
+    mid.extrude(PEG_Z2 - PEG_Z1).translate([0, 0, PEG_Z1]),
+    loft(mid, PEG_Z2, top, PEG_HEIGHT),
   ];
 }
 
 /** 2D outer wall profile derived from the cell footprint — always the spec shape. */
-function buildOuterProfile(cells: GridCell[]): Geom2 {
+function buildOuterProfile(wasm: ManifoldToplevel, cells: GridCell[]): CrossSection {
   const halfTol = (GRID_PITCH - PEG_W_TOP) / 2;  // 0.25 mm clearance per side
-
-  const footprint = union(cells.map(({ x, y }) =>
-    primitives.rectangle({
-      size:   [GRID_PITCH, GRID_PITCH],
-      center: [x * GRID_PITCH + GRID_PITCH / 2, y * GRID_PITCH + GRID_PITCH / 2],
-    }) as Geom2
-  ));
+  const footprint = wasm.CrossSection.union(cells.map(({ x, y }) =>
+    wasm.CrossSection.square([GRID_PITCH, GRID_PITCH]).translate([x * GRID_PITCH, y * GRID_PITCH])));
 
   // Shrink by (halfTol + OUTER_R) then re-expand to apply the rounded fillet.
-  return expansions.offset(
-    { delta: OUTER_R, corners: 'round', segments: 32 },
-    expansions.offset({ delta: -(halfTol + OUTER_R), corners: 'chamfer' }, footprint),
-  ) as Geom2;
+  return footprint.offset(-(halfTol + OUTER_R), 'Square', 2)
+    .offset(OUTER_R, 'Round', 2, 32);
 }
 
 /** Pitch-aligned bounding box of a piece's cells, in mm (the split slab). */
@@ -219,35 +191,8 @@ function pieceProfileCS(
   return binOuterCS.intersect(new wasm.CrossSection(rectPoly(piecePitchBox(cells))));
 }
 
-/** JSCAD-fallback twin of pieceProfileCS (degraded mode: keeps the piece-cell
- *  profile — 0.25 mm-inset seams — if the 2D intersect throws). */
-function pieceProfileJscad(cells: GridCell[], binCells: GridCell[], binOuterProfile: Geom2): Geom2 {
-  if (cells.length === binCells.length) return binOuterProfile;
-  try {
-    const cut = booleans.intersect(binOuterProfile, rectGeom2(piecePitchBox(cells))) as Geom2;
-    if (geom2Area(cut) > 1e-6) return cut;
-  } catch { /* degraded mode: accept the inset seam */ }
-  return buildOuterProfile(cells);
-}
-
-/** Connector pegs for all cells unified with the solid bridge and bin walls. */
-function buildShell(cells: GridCell[], totalHeight: number, outerProfile: Geom2): Geom3 {
-  const pegs: Geom3 = union(cells.flatMap(({ x, y }) =>
-    pegSections(x * GRID_PITCH + GRID_PITCH / 2, y * GRID_PITCH + GRID_PITCH / 2)
-  ));
-  // Start the body CSG_EPSILON below the peg tops so the two solids overlap in
-  // volume. A flush z = PEG_HEIGHT junction is a coplanar kiss between mismatched
-  // cross-sections (rounded peg top vs. the outer wall), which the boolean fails
-  // to fuse and exports as non-manifold seams.
-  const body: Geom3 = transforms.translate([0, 0, PEG_HEIGHT - CSG_EPSILON],
-    extrusions.extrudeLinear({ height: totalHeight - PEG_HEIGHT + CSG_EPSILON }, outerProfile)) as Geom3;
-
-  return booleans.union(pegs, body) as Geom3;
-}
-
 // ── Cavity plan ────────────────────────────────────────────────────────────────
-// The cavity cross-section is authored as plain axis-aligned rectangles so the
-// manifold path and the JSCAD fallback share one wall-layout computation.
+// The cavity cross-section is authored as plain axis-aligned rectangles.
 
 interface Rect { x: number; y: number; w: number; h: number }
 
@@ -358,18 +303,14 @@ function planCavity(
 
 /** Fastener pockets at the four corners of each cell's connector peg. */
 function buildFastenerHoles(
-  cells: GridCell[], radius: number, depth: number, segments: number,
-): Geom3[] {
+  wasm: ManifoldToplevel, cells: GridCell[], radius: number, depth: number, segments: number,
+): Manifold[] {
   return cells.flatMap(({ x, y }) => {
     const cx = x * GRID_PITCH + GRID_PITCH / 2;
     const cy = y * GRID_PITCH + GRID_PITCH / 2;
-    return FASTENER_OFFSETS.map(([dx, dy]) =>
-      primitives.cylinder({
-        radius, segments,
-        height: depth + CSG_EPSILON,
-        center: [cx + dx, cy + dy, depth / 2],
-      }) as Geom3
-    );
+    return FASTENER_OFFSETS.map(([dx, dy]) => wasm.Manifold
+      .cylinder(depth + CSG_EPSILON, radius, radius, segments)
+      .translate([cx + dx, cy + dy, 0]));
   });
 }
 
@@ -590,8 +531,7 @@ function generatePieceManifold(
   // Positive solids: the connector pegs plus the extruded body/wall column.
   const outerCS = pieceProfileCS(wasm, cells, binCells, binOuterCS);
   const solids: Manifold[] = cells.flatMap(({ x, y }) =>
-    pegSections(x * GRID_PITCH + GRID_PITCH / 2, y * GRID_PITCH + GRID_PITCH / 2)
-      .map((s) => geom3ToManifold(wasm, s)),
+    pegSections(wasm, x * GRID_PITCH + GRID_PITCH / 2, y * GRID_PITCH + GRID_PITCH / 2),
   );
   // Flush at z = PEG_HEIGHT: safe only because both sides land on the identical
   // coordinate — 4.75 is exactly representable, so the float32-quantized peg
@@ -619,9 +559,9 @@ function generatePieceManifold(
 
   // Fastener pockets (magnet recess and/or M3 pilot), subtracted as one union.
   const holes: Manifold[] = [
-    ...(config.magnetHoles ? buildFastenerHoles(cells, MAGNET_RADIUS, MAGNET_DEPTH, 32) : []),
-    ...(config.screwHoles  ? buildFastenerHoles(cells, SCREW_RADIUS,  SCREW_DEPTH,  16) : []),
-  ].map((h) => geom3ToManifold(wasm, h));
+    ...(config.magnetHoles ? buildFastenerHoles(wasm, cells, MAGNET_RADIUS, MAGNET_DEPTH, 32) : []),
+    ...(config.screwHoles  ? buildFastenerHoles(wasm, cells, SCREW_RADIUS,  SCREW_DEPTH,  16) : []),
+  ];
   if (holes.length) bin = bin.subtract(Manifold.union(holes));
 
   // 1 µm simplify: drops the exactly-collinear vertices boolean triangulation
@@ -643,18 +583,17 @@ function translateMesh(mesh: BinMesh, dx: number, dy: number): BinMesh {
 }
 
 function previewClipBox(
+  wasm: ManifoldToplevel,
   bounds: ReturnType<typeof cellBounds>, totalHeight: number,
   insetX: boolean, insetY: boolean,
-): Geom3 {
+): Manifold {
   const padding = 1;
   const minX = bounds.minX + (insetX ? PREVIEW_INSET : -padding);
   const maxX = bounds.maxX - (insetX ? PREVIEW_INSET : -padding);
   const minY = bounds.minY + (insetY ? PREVIEW_INSET : -padding);
   const maxY = bounds.maxY - (insetY ? PREVIEW_INSET : -padding);
-  return primitives.cuboid({
-    size: [maxX - minX, maxY - minY, totalHeight + padding * 2],
-    center: [(minX + maxX) / 2, (minY + maxY) / 2, totalHeight / 2],
-  }) as Geom3;
+  return wasm.Manifold.cube([maxX - minX, maxY - minY, totalHeight + padding * 2])
+    .translate([minX, minY, -padding]);
 }
 
 /**
@@ -667,18 +606,7 @@ function clipPreviewManifold(
   totalHeight: number, insetX: boolean, insetY: boolean,
 ): Manifold {
   if (!insetX && !insetY) return solid;
-  return solid.intersect(geom3ToManifold(
-    wasm, previewClipBox(bounds, totalHeight, insetX, insetY)));
-}
-
-/** JSCAD equivalent of clipPreviewManifold, kept off the export geom. */
-function clipPreviewGeom(
-  geom: Geom3, bounds: ReturnType<typeof cellBounds>, totalHeight: number,
-  insetX: boolean, insetY: boolean,
-): Geom3 {
-  if (!insetX && !insetY) return geom;
-  return booleans.intersect(
-    geom, previewClipBox(bounds, totalHeight, insetX, insetY)) as Geom3;
+  return solid.intersect(previewClipBox(wasm, bounds, totalHeight, insetX, insetY));
 }
 
 /**
@@ -728,22 +656,15 @@ function pieceName(binIdx: number, binCount: number, i: number, n: number): stri
  * 2-manifold triangle mesh with no self-intersections, so slicers never report
  * "non-manifold edge" errors.
  *
- * JSCAD's mesh booleans leave T-junctions along every curved cut and its 2D
- * `offset()` self-intersects once the inward distance exceeds a corner radius.
- * Both defects export as non-manifold geometry. Here JSCAD is used only to
- * author the individual solids (each a valid closed primitive) and 2D profiles;
- * the manifold engine performs every boolean and every inward offset (via
- * Clipper2, which cannot self-intersect).
- *
  * Ignores split lines — every logical bin as one solid, unioned into a single
  * mesh. Use generateBinPieces for the split-aware path.
  */
 export function generateBinManifold(wasm: ManifoldToplevel, config: BinConfig): BinMesh {
   if (config.bins.length === 0) {
-    return manifoldMesh(geom3ToManifold(wasm, primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3));
+    return manifoldMesh(wasm.Manifold.cube([1, 1, 1]));
   }
   const solids = config.bins.map((bin) => {
-    const binOuterCS = geom2ToCrossSection(wasm, buildOuterProfile(bin.cells));
+    const binOuterCS = buildOuterProfile(wasm, bin.cells);
     return generatePieceManifold(wasm, config, bin.cells, bin.cells, binOuterCS,
       resolveWalls(bin.cells, bin.cells, config), bin.slope);
   });
@@ -795,7 +716,7 @@ export function generateBinPieces(
     const insetX = bin.splitLines.some((line) => line.axis === 'x');
     const insetY = bin.splitLines.some((line) => line.axis === 'y');
     // Whole-bin spec profile, built once and shared by every piece of this bin.
-    const binOuterCS = geom2ToCrossSection(wasm, buildOuterProfile(bin.cells));
+    const binOuterCS = buildOuterProfile(wasm, bin.cells);
     const binPreviewMeshes: BinMesh[] = [];
     parts.forEach((part, i) => {
       const solid = generatePieceManifold(
@@ -821,220 +742,4 @@ export function generateBinPieces(
   });
 
   return { pieces, previews };
-}
-
-// ── JSCAD fallback path ────────────────────────────────────────────────────────
-// Lower fidelity (non-manifold seams are expected of JSCAD mesh booleans, and
-// large cavity rounding is skipped — JSCAD offset self-intersects on big inward
-// deltas), but it must never throw: it is the degraded mode when WASM fails.
-
-function rectGeom2(r: Rect): Geom2 {
-  return primitives.rectangle({ size: [r.w, r.h], center: [r.x + r.w / 2, r.y + r.h / 2] }) as Geom2;
-}
-
-function geom2Area(g: Geom2): number {
-  try {
-    return Math.abs(measurements.measureArea(g) as number);
-  } catch {
-    return 0;
-  }
-}
-
-function buildCavityJscad(
-  plan: CavityPlan, rc: number, filletR: number, totalHeight: number,
-): { geom: Geom3; cs: Geom2 } | null {
-  let cavityRaw = union(plan.cellSquares.map(rectGeom2));
-  if (plan.solidStrips.length) {
-    cavityRaw = booleans.subtract(cavityRaw, union(plan.solidStrips.map(rectGeom2))) as Geom2;
-  }
-  if (geom2Area(cavityRaw) < 1e-6) return null;
-
-  // Unlike the manifold path, the cavity is NOT extended through open faces
-  // before rounding/fillet insets: JSCAD's 2D booleans choke on the exactly
-  // abutting extension rects ("geometry is not closed"). The rounding and
-  // fillet therefore retreat slightly at open faces — a cosmetic defect that is
-  // acceptable in this degraded mode.
-  let cavityCS = cavityRaw;
-  if (rc > 0 && rc <= 6) {
-    try {
-      const rounded = expansions.offset({ delta: rc, corners: 'round', segments: 32 },
-        expansions.offset({ delta: -rc, corners: 'round', segments: 32 }, cavityRaw)) as Geom2;
-      if (geom2Area(rounded) > 1e-6) cavityCS = rounded;
-    } catch { /* keep the unrounded cavity */ }
-  }
-
-  const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
-  const solids: Geom3[] = [];
-  const steps = filletR > 0 ? filletSteps(filletR) : 0;
-  const stepH = steps > 0 ? filletR / steps : 0;
-  for (let i = 0; i < steps; i++) {
-    const t = (i + 0.5) / steps;
-    const inset = filletR * (1 - Math.sqrt(Math.max(0, 2 * t - t * t)));
-    try {
-      const prof = (inset > 0.001
-        ? expansions.offset({ delta: -inset, corners: 'round', segments: 16 }, cavityCS)
-        : cavityCS) as Geom2;
-      if (geom2Area(prof) < 1e-6) continue;
-      // Overlap into the next step (and, on the last step, into the column) by
-      // CSG_EPSILON so the union merges through a real volume.
-      solids.push(transforms.translate([0, 0, floorZ + i * stepH],
-        extrusions.extrudeLinear({ height: stepH + CSG_EPSILON }, prof)) as Geom3);
-    } catch { continue; }
-  }
-  solids.push(transforms.translate([0, 0, floorZ + filletR],
-    extrusions.extrudeLinear(
-      { height: totalHeight - floorZ - filletR + CSG_EPSILON },
-      cavityCS,
-    )) as Geom3);
-  return { geom: union(solids), cs: cavityCS };
-}
-
-/** Fallback inner walls: clipped prisms, no height-transition ramps (degraded mode). */
-function buildInnerWallsJscad(walls: InnerWall[], outerProfile: Geom2, totalHeight: number): Geom3[] {
-  const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
-  const solids: Geom3[] = [];
-  for (const w of walls) {
-    const quad = innerWallQuad(w);
-    if (!quad) continue;
-    let fp = primitives.polygon({ points: quad }) as Geom2;
-    try {
-      const clipped = booleans.intersect(fp, outerProfile) as Geom2;
-      if (geom2Area(clipped) < 1e-6) continue;
-      fp = clipped;
-    } catch { /* unclipped quad still renders; may poke past walls in degraded mode */ }
-    const top = innerWallTop(w, floorZ, totalHeight);
-    const bottom = floorZ - WALL_EMBED;
-    try {
-      solids.push(transforms.translate([0, 0, bottom],
-        extrusions.extrudeLinear({ height: top - bottom }, fp)) as Geom3);
-    } catch { continue; }
-  }
-  return solids;
-}
-
-/** Fallback sloped base: a staircase of slabs under the slope plane (degraded mode). */
-function buildSlopedBaseJscad(
-  slope: BinSlope | undefined, binCells: GridCell[], cavityCS: Geom2, totalHeight: number,
-): Geom3[] {
-  const angle = Math.min(60, Math.max(0, slope?.angle || 0));
-  if (angle < 0.1) return [];
-  const m = Math.tan((angle * Math.PI) / 180);
-  const [ax, ay] = slopeAscent(slope!.dir);
-  const b = cellBounds(binCells);
-  const corners: [number, number][] = [[b.minX, b.minY], [b.maxX, b.minY], [b.minX, b.maxY], [b.maxX, b.maxY]];
-  const along = corners.map(([x, y]) => ax * x + ay * y);
-  const minA = Math.min(...along);
-  const span = Math.max(...along) - minA;
-
-  const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
-  const hMax = Math.min(m * span, totalHeight - floorZ);
-  if (hMax < 0.02) return [];
-
-  // Ascent is axis-aligned, so each "at least this tall" region is a plain rect.
-  const halfRect = (s: number): Geom2 => {
-    const pad = 1;
-    if (ax === 1)  return rectGeom2({ x: b.minX + s, y: b.minY - pad, w: b.maxX - (b.minX + s) + pad, h: b.maxY - b.minY + 2 * pad });
-    if (ax === -1) return rectGeom2({ x: b.minX - pad, y: b.minY - pad, w: (b.maxX - s) - b.minX + pad, h: b.maxY - b.minY + 2 * pad });
-    if (ay === 1)  return rectGeom2({ x: b.minX - pad, y: b.minY + s, w: b.maxX - b.minX + 2 * pad, h: b.maxY - (b.minY + s) + pad });
-    return rectGeom2({ x: b.minX - pad, y: b.minY - pad, w: b.maxX - b.minX + 2 * pad, h: (b.maxY - s) - b.minY + pad });
-  };
-
-  const solids: Geom3[] = [];
-  const steps = 12;
-  const dh = hMax / steps;
-  for (let k = 0; k < steps; k++) {
-    const s = ((k + 1) * dh) / m;
-    if (s >= span) break;
-    try {
-      const prof = booleans.intersect(cavityCS, halfRect(s)) as Geom2;
-      if (geom2Area(prof) < 1e-6) continue;
-      const bottom = k === 0 ? floorZ - WALL_EMBED : floorZ + k * dh - CSG_EPSILON;
-      solids.push(transforms.translate([0, 0, bottom],
-        extrusions.extrudeLinear({ height: floorZ + (k + 1) * dh - bottom }, prof)) as Geom3);
-    } catch { continue; }
-  }
-  return solids;
-}
-
-function generatePieceJscad(
-  config: BinConfig, cells: GridCell[], binCells: GridCell[], binOuterProfile: Geom2,
-  walls: EffectiveWalls, slope: BinSlope | undefined,
-): Geom3 {
-  const totalHeight = totalHeightOf(config);
-  const filletR = clampFilletR(config.innerFilletRadius, totalHeight);
-  const rc = Math.max(0, config.cavityCornerRadius || 0);
-
-  const outerProfile = pieceProfileJscad(cells, binCells, binOuterProfile);
-  const shell = buildShell(cells, totalHeight, outerProfile);
-  const wholeWalls = resolveWalls(binCells, binCells, config);
-  const plan = planCavity(cells, binCells, walls, wholeWalls, config.wallThickness, Math.max(rc, filletR) + 1);
-  const cavity = buildCavityJscad(plan, rc, filletR, totalHeight);
-
-  let bin: Geom3 = cavity ? booleans.subtract(shell, cavity.geom) as Geom3 : shell;
-  if (cavity) {
-    const additions = [
-      ...buildInnerWallsJscad(config.innerWalls ?? [], outerProfile, totalHeight),
-      ...buildSlopedBaseJscad(slope, binCells, cavity.cs, totalHeight),
-    ];
-    if (additions.length) bin = booleans.union(bin, ...additions) as Geom3;
-  }
-  if (config.magnetHoles) bin = booleans.subtract(bin, ...buildFastenerHoles(cells, MAGNET_RADIUS, MAGNET_DEPTH, 32)) as Geom3;
-  if (config.screwHoles)  bin = booleans.subtract(bin, ...buildFastenerHoles(cells, SCREW_RADIUS,  SCREW_DEPTH,  16)) as Geom3;
-  return bin;
-}
-
-/** JSCAD-only fallback for the whole layout (ignores split lines). */
-export function generateBin(config: BinConfig): Geom3 {
-  if (config.bins.length === 0) return primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3;
-  const solids = config.bins.map((bin) =>
-    generatePieceJscad(config, bin.cells, bin.cells, buildOuterProfile(bin.cells),
-      resolveWalls(bin.cells, bin.cells, config), bin.slope));
-  return union(solids);
-}
-
-export interface BinPieceGeom {
-  name: string;
-  bin: number;         // logical bin id, so the viewer can color-match the editors
-  exportGeom: Geom3;   // piece-local coordinates, print-ready
-  previewGeom: Geom3;  // whole-bin coordinates
-}
-
-/**
- * JSCAD-only fallback for the split-aware path. Output geoms are mirrored
- * across Y (same rationale as mirrorMeshY) so the part matches the canvas.
- */
-export function generateBinPiecesJscad(config: BinConfig): BinPieceGeom[] {
-  if (config.bins.length === 0) {
-    const geom = generateBin(config);
-    return [{ name: pieceName(0, 1, 0, 1), bin: 0, exportGeom: geom, previewGeom: geom }];
-  }
-  const allCells = flattenBins(config.bins);
-  const layoutH = (Math.max(...allCells.map((c) => c.y)) + 1) * GRID_PITCH;
-  const bins = config.bins;
-  const totalHeight = totalHeightOf(config);
-  const partsByBin = bins.map((bin) => partitionCells(bin.cells, bin.splitLines));
-  return bins.flatMap((bin, bi) => {
-    const parts = partsByBin[bi];
-    const insetX = bin.splitLines.some((line) => line.axis === 'x');
-    const insetY = bin.splitLines.some((line) => line.axis === 'y');
-    // Whole-bin spec profile, built once and shared by every piece of this bin.
-    const binOuterProfile = buildOuterProfile(bin.cells);
-    return parts.map((part, i) => {
-      const geom = generatePieceJscad(config, part.cells, bin.cells, binOuterProfile,
-        resolveWalls(part.cells, bin.cells, config), bin.slope);
-      const minX = Math.min(...part.cells.map((c) => c.x));
-      const minY = Math.min(...part.cells.map((c) => c.y));
-      const maxY = Math.max(...part.cells.map((c) => c.y));
-      const local = transforms.translate([-minX * GRID_PITCH, -minY * GRID_PITCH, 0], geom) as Geom3;
-      return {
-        name: pieceName(bi, bins.length, i, parts.length),
-        bin: bin.id,
-        exportGeom: transforms.translate([0, (maxY - minY + 1) * GRID_PITCH, 0],
-          transforms.mirrorY(local)) as Geom3,
-        previewGeom: transforms.translate([0, layoutH, 0],
-          transforms.mirrorY(clipPreviewGeom(
-            geom, cellBounds(part.cells), totalHeight, insetX, insetY))) as Geom3,
-      };
-    });
-  });
 }

@@ -22,7 +22,7 @@ Use Mantine controls and layout primitives before custom UI. Put cross-app contr
 
 Tabs read and write through `useAppStore()`. Bin-owned state must go through `updateBin()` so automatic split lines remain effective. Keep `BinConfig` plain and structured-clone compatible for worker messages.
 
-The manifold path (`generateBinPieces()` / `generateBinManifold()`) is the production correctness standard. Maintain the JSCAD fallback where practical, but feature parity is not required and fallback limitations must never weaken manifold behavior. Preserve `manifoldMesh()` in the export path because it welds vertices and repairs float32-degenerate slivers.
+The manifold path (`generateBinPieces()` / `generateBinManifold()`) is the production geometry path. Author geometry with native `manifold-3d` `CrossSection` and `Manifold` operations. Preserve `manifoldMesh()` in the export path because it welds vertices and repairs float32-degenerate slivers.
 
 The editors map SVG y downward to mm +y, so generated output is mirrored across Y at the geometry boundary. Do not compensate for orientation in the viewer. Split seam edges are open unless a divider lies on the seam. Combine solids with manifold booleans, use `CrossSection.offset` for inward 2D offsets, feed manifold individually closed primitives, and use a small overlap such as `CSG_EPSILON` where non-identical flush coordinates could create membranes.
 
@@ -41,7 +41,7 @@ Available commands:
 
 Run lint and the production build for every non-trivial code change. Do not add new Vitest coverage by default during rapid feature development. Run existing Vitest tests locally when changing printer behavior or mesh-validation behavior already covered by the suite; CI always runs the complete suite.
 
-Run `check:manifold` for every print-affecting change, including geometry, split-piece generation, STL serialization, walls, slopes, fasteners, worker generation, and configuration consumed by geometry. Manifold validation is the printability gate; JSCAD fallback output is best effort.
+Run `check:manifold` for every print-affecting change, including geometry, split-piece generation, STL serialization, walls, slopes, fasteners, worker generation, and configuration consumed by geometry. Manifold validation is the printability gate.
 
 Use Playwright for every browser-visible change. If Playwright is unavailable locally, equivalent manual browser verification is acceptable, but the final report must name the method used. CI has no manual fallback: when path classification requires Playwright, a browser-test failure is a failed check.
 
@@ -66,4 +66,4 @@ Use short, imperative commit subjects. Pull requests should describe user-visibl
 
 ## Known Limitations
 
-STL is the only wired export format. The JSCAD fallback skips inner-wall transition ramps, approximates sloped floors, and can degrade split seam profiles. Babylon.js imports are broad and may be optimized later if bundle size becomes a priority.
+STL is the only wired export format. Babylon.js imports are broad and may be optimized later if bundle size becomes a priority.
