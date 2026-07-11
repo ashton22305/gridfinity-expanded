@@ -323,7 +323,7 @@ function resolveWalls(pieceCells: GridCell[], binCells: GridCell[], config: BinC
   return effectiveWalls(pieceCells, binCells, config.openEdges ?? [], config.dividerEdges ?? []);
 }
 
-function totalHeightOf(config: BinConfig): number {
+export function totalHeightOf(config: BinConfig): number {
   return BASE_TOTAL_HEIGHT + HEIGHT_PER_UNIT * Math.max(1, config.heightUnits);
 }
 

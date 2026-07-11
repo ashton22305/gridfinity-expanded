@@ -15,10 +15,13 @@ import {
   Animation,
   CubicEase,
   EasingFunction,
+  MeshBuilder,
   type AbstractMesh,
 } from '@babylonjs/core';
 import { STLFileLoader } from '@babylonjs/loaders/STL';
 import { binColor } from '../sidebar/binColors';
+import { bedMargin } from '../../lib/printers';
+import { useAppStore } from '../../store';
 import type { PreviewStl } from '../../hooks/useBinGeometry';
 
 // Import STL vertices exactly as written. The loader's default Y/Z swap is a
@@ -43,7 +46,27 @@ interface Props {
   error: string | null;
 }
 
+/** The 12 edges of an axis-aligned box in the model's Z-up mm frame. */
+function boxEdges(cx: number, cy: number, w: number, d: number, h: number): Vector3[][] {
+  const x0 = cx - w / 2, x1 = cx + w / 2;
+  const y0 = cy - d / 2, y1 = cy + d / 2;
+  const ring = (z: number) => [
+    [new Vector3(x0, y0, z), new Vector3(x1, y0, z)],
+    [new Vector3(x1, y0, z), new Vector3(x1, y1, z)],
+    [new Vector3(x1, y1, z), new Vector3(x0, y1, z)],
+    [new Vector3(x0, y1, z), new Vector3(x0, y0, z)],
+  ];
+  const posts = [
+    [new Vector3(x0, y0, 0), new Vector3(x0, y0, h)],
+    [new Vector3(x1, y0, 0), new Vector3(x1, y0, h)],
+    [new Vector3(x1, y1, 0), new Vector3(x1, y1, h)],
+    [new Vector3(x0, y1, 0), new Vector3(x0, y1, h)],
+  ];
+  return [...ring(0), ...ring(h), ...posts];
+}
+
 export function BabylonViewer({ previews, error }: Props) {
+  const printer = useAppStore((s) => s.printer);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<Scene | null>(null);
   const cameraRef = useRef<ArcRotateCamera | null>(null);
@@ -53,6 +76,74 @@ export function BabylonViewer({ previews, error }: Props) {
     meshes: [],
     materials: [],
   });
+  // Build-volume overlay meshes, tracked apart from the model so fitCamera
+  // (which frames currentRef.meshes only) never frames the printer volume.
+  const volumeRef = useRef<{ meshes: AbstractMesh[]; materials: StandardMaterial[] }>({
+    meshes: [],
+    materials: [],
+  });
+  const printerRef = useRef(printer);
+  printerRef.current = printer;
+
+  /**
+   * Rebuilds the printer build-volume overlay: an outer wireframe box with a
+   * faint fill at the full bed size, plus an inset wireframe showing the safe
+   * envelope after head clearance. Authored in the model's Z-up mm frame under
+   * modelRoot (never compensate orientation in the viewer), centered over the
+   * model's footprint with the floor at z = 0.
+   */
+  const rebuildVolume = () => {
+    const scene = sceneRef.current;
+    const root = rootRef.current;
+    if (!scene || !root) return;
+
+    volumeRef.current.meshes.forEach((m) => m.dispose());
+    volumeRef.current.materials.forEach((m) => m.dispose());
+    volumeRef.current = { meshes: [], materials: [] };
+
+    const p = printerRef.current;
+    const h = p.bedHeight ?? 250;
+    const margin = bedMargin(p);
+
+    // Center the volume over the model footprint (meshes are parented to root
+    // with no extra transform, so their local bounds are in the same frame).
+    let cx = 0, cy = 0;
+    const meshes = currentRef.current.meshes;
+    if (meshes.length > 0) {
+      let min: Vector3 | null = null;
+      let max: Vector3 | null = null;
+      for (const m of meshes) {
+        const bb = m.getBoundingInfo().boundingBox;
+        min = min ? Vector3.Minimize(min, bb.minimum) : bb.minimum.clone();
+        max = max ? Vector3.Maximize(max, bb.maximum) : bb.maximum.clone();
+      }
+      cx = (min!.x + max!.x) / 2;
+      cy = (min!.y + max!.y) / 2;
+    }
+
+    const outer = MeshBuilder.CreateLineSystem('bedVolume',
+      { lines: boxEdges(cx, cy, p.bedWidth, p.bedDepth, h) }, scene);
+    outer.color = new Color3(0.5, 0.52, 0.58);
+    const safe = MeshBuilder.CreateLineSystem('bedSafeEnvelope',
+      { lines: boxEdges(cx, cy, p.bedWidth - margin * 2, p.bedDepth - margin * 2, h) }, scene);
+    safe.color = new Color3(0.85, 0.7, 0.25);
+    safe.alpha = 0.6;
+
+    const fill = MeshBuilder.CreateBox('bedVolumeFill',
+      { width: p.bedWidth, height: p.bedDepth, depth: h }, scene);
+    fill.position.set(cx, cy, h / 2);
+    const fillMat = new StandardMaterial('bedVolumeFillMat', scene);
+    fillMat.diffuseColor = new Color3(0.4, 0.45, 0.6);
+    fillMat.alpha = 0.05;
+    fillMat.specularColor = Color3.Black();
+    fill.material = fillMat;
+
+    for (const m of [outer, safe, fill]) {
+      m.parent = root;
+      m.isPickable = false;
+    }
+    volumeRef.current = { meshes: [outer, safe, fill], materials: [fillMat] };
+  };
 
   /**
    * Points the camera at the loaded model, choosing the radius that fits the
@@ -215,6 +306,7 @@ export function BabylonViewer({ previews, error }: Props) {
         currentRef.current.materials.forEach((m) => m.dispose());
         currentRef.current = { meshes: loaded, materials };
         loaded.forEach((m) => m.setEnabled(true));
+        rebuildVolume(); // re-center the volume over the new footprint
 
         // Keep the user's orbit angle; just glide to frame the new model.
         fitCamera(true);
@@ -222,6 +314,10 @@ export function BabylonViewer({ previews, error }: Props) {
       .catch((err) => console.error('STL load failed:', err));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previews]);
+
+  // Re-render the build-volume overlay when the printer (or its margin) changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => rebuildVolume(), [printer]);
 
   return (
     <div className="viewer">

@@ -4,19 +4,24 @@ import { partitionCells, sortSplitLines } from './split';
 import type { DisplayCell } from './split';
 
 export const PRINTER_PROFILES: PrinterProfile[] = [
-  { name: 'Bambu Lab A1 Mini', bedWidth: 180, bedDepth: 180 },
-  { name: 'Bambu Lab P1S / X1C', bedWidth: 256, bedDepth: 256 },
-  { name: 'Creality Ender 3 / V2', bedWidth: 220, bedDepth: 220 },
-  { name: 'Creality K1', bedWidth: 220, bedDepth: 220 },
-  { name: 'Elegoo Centauri Carbon / Carbon 2', bedWidth: 256, bedDepth: 256 },
-  { name: 'Prusa MK4 / MK3S+', bedWidth: 250, bedDepth: 210 },
-  { name: 'Prusa Mini+', bedWidth: 180, bedDepth: 180 },
-  { name: 'Voron 2.4 (250mm)', bedWidth: 250, bedDepth: 250 },
-  { name: 'Voron 2.4 (300mm)', bedWidth: 300, bedDepth: 300 },
-  { name: 'Custom', bedWidth: 220, bedDepth: 220 },
+  { name: 'Bambu Lab A1 Mini', bedWidth: 180, bedDepth: 180, bedHeight: 180 },
+  { name: 'Bambu Lab P1S / X1C', bedWidth: 256, bedDepth: 256, bedHeight: 256 },
+  { name: 'Creality Ender 3 / V2', bedWidth: 220, bedDepth: 220, bedHeight: 250 },
+  { name: 'Creality K1', bedWidth: 220, bedDepth: 220, bedHeight: 250 },
+  { name: 'Elegoo Centauri Carbon / Carbon 2', bedWidth: 256, bedDepth: 256, bedHeight: 256 },
+  { name: 'Prusa MK4 / MK3S+', bedWidth: 250, bedDepth: 210, bedHeight: 220 },
+  { name: 'Prusa Mini+', bedWidth: 180, bedDepth: 180, bedHeight: 180 },
+  { name: 'Voron 2.4 (250mm)', bedWidth: 250, bedDepth: 250, bedHeight: 250 },
+  { name: 'Voron 2.4 (300mm)', bedWidth: 300, bedDepth: 300, bedHeight: 300 },
+  { name: 'Custom', bedWidth: 220, bedDepth: 220, bedHeight: 250 },
 ];
 
-const BED_MARGIN = 5; // mm clearance around part on bed
+export const BED_MARGIN = 5; // default mm clearance around part on bed
+
+/** Print-head clearance per side for a printer, falling back to the default. */
+export function bedMargin(printer: PrinterProfile): number {
+  return printer.margin ?? BED_MARGIN;
+}
 
 export function getGridFootprintCells(cells: GridCell[]): {
   widthCells: number;
@@ -46,23 +51,25 @@ function groupByBin(cells: (GridCell | DisplayCell)[]): { bin: number; cells: Gr
 }
 
 function boxFits(widthCells: number, depthCells: number, printer: PrinterProfile): boolean {
+  const margin = bedMargin(printer);
   const binWidth = widthCells * GRID_PITCH;
   const binDepth = depthCells * GRID_PITCH;
-  const normal = binWidth + BED_MARGIN * 2 <= printer.bedWidth &&
-    binDepth + BED_MARGIN * 2 <= printer.bedDepth;
-  const rotated = binDepth + BED_MARGIN * 2 <= printer.bedWidth &&
-    binWidth + BED_MARGIN * 2 <= printer.bedDepth;
+  const normal = binWidth + margin * 2 <= printer.bedWidth &&
+    binDepth + margin * 2 <= printer.bedDepth;
+  const rotated = binDepth + margin * 2 <= printer.bedWidth &&
+    binWidth + margin * 2 <= printer.bedDepth;
   return normal || rotated;
 }
 
 function checkBedFitOne(cells: GridCell[], printer: PrinterProfile): BedFitResult {
+  const margin = bedMargin(printer);
   const { widthCells, depthCells } = getGridFootprintCells(cells);
   const binWidth = widthCells * GRID_PITCH;
   const binDepth = depthCells * GRID_PITCH;
-  const normal = binWidth + BED_MARGIN * 2 <= printer.bedWidth &&
-    binDepth + BED_MARGIN * 2 <= printer.bedDepth;
-  const rotated = binDepth + BED_MARGIN * 2 <= printer.bedWidth &&
-    binWidth + BED_MARGIN * 2 <= printer.bedDepth;
+  const normal = binWidth + margin * 2 <= printer.bedWidth &&
+    binDepth + margin * 2 <= printer.bedDepth;
+  const rotated = binDepth + margin * 2 <= printer.bedWidth &&
+    binWidth + margin * 2 <= printer.bedDepth;
 
   return {
     fits: normal || rotated,
@@ -99,8 +106,8 @@ export function checkBedFit(
 }
 
 /** Largest bin span (in cells) that fits one bed axis, honoring the margin. */
-function maxCellsForBed(bedSize: number): number {
-  return Math.floor((bedSize - BED_MARGIN * 2) / GRID_PITCH);
+function maxCellsForBed(bedSize: number, margin: number): number {
+  return Math.floor((bedSize - margin * 2) / GRID_PITCH);
 }
 
 function axisSplitIndices(min: number, spanCells: number, maxCells: number): number[] {
@@ -126,10 +133,11 @@ function computeAutoSplitLinesForBin(
   const minX = Math.min(...xs), minY = Math.min(...ys);
   const { widthCells, depthCells } = getGridFootprintCells(cells);
 
+  const margin = bedMargin(printer);
   const candidate = (bedWidth: number, bedDepth: number): SplitLine[] => sortSplitLines([
-    ...axisSplitIndices(minX, widthCells, maxCellsForBed(bedWidth))
+    ...axisSplitIndices(minX, widthCells, maxCellsForBed(bedWidth, margin))
       .map((index): SplitLine => ({ axis: 'x', index })),
-    ...axisSplitIndices(minY, depthCells, maxCellsForBed(bedDepth))
+    ...axisSplitIndices(minY, depthCells, maxCellsForBed(bedDepth, margin))
       .map((index): SplitLine => ({ axis: 'y', index })),
   ]);
   const plans = [
@@ -219,11 +227,18 @@ export interface PieceFitResult {
   allFit: boolean;
   worst: BedFitResult;
   failingPieces: BedFitResult[];
+  /** False when a model height was supplied and it exceeds the printer's build height. */
+  heightFits: boolean;
 }
 
-/** Bed fit across all pieces (every logical bin × its split chunks). */
+/**
+ * Bed fit across all pieces (every logical bin × its split chunks). Splits are
+ * XY-only, so every piece shares the full model height: pass `modelHeightMm`
+ * (e.g. `totalHeightOf(config)`) to also check it against the printer's
+ * `bedHeight`. The check is skipped when either value is absent.
+ */
 export function checkPieceFit(
-  bins: LogicalBin[], printer: PrinterProfile,
+  bins: LogicalBin[], printer: PrinterProfile, modelHeightMm?: number,
 ): PieceFitResult;
 /** @deprecated Compatibility overload for callers migrating from global lines. */
 export function checkPieceFit(
@@ -232,10 +247,13 @@ export function checkPieceFit(
 export function checkPieceFit(
   binsOrCells: LogicalBin[] | (GridCell | DisplayCell)[],
   printerOrLines: PrinterProfile | SplitLine[],
-  legacyPrinter?: PrinterProfile,
+  printerOrHeight?: PrinterProfile | number,
 ): PieceFitResult {
-  const legacy = legacyPrinter !== undefined;
-  const printer = legacy ? legacyPrinter : printerOrLines as PrinterProfile;
+  const legacy = typeof printerOrHeight === 'object';
+  const printer = legacy ? printerOrHeight : printerOrLines as PrinterProfile;
+  const modelHeightMm = legacy ? undefined : printerOrHeight;
+  const heightFits = modelHeightMm === undefined || printer.bedHeight === undefined ||
+    modelHeightMm <= printer.bedHeight;
   const bins: LogicalBin[] = legacy
     ? groupByBin(binsOrCells as (GridCell | DisplayCell)[]).map(({ bin, cells: groupCells }) => ({
         id: bin, cells: groupCells, isManual: true, splitLines: printerOrLines as SplitLine[],
@@ -259,5 +277,5 @@ export function checkPieceFit(
       }
     }
   }
-  return { pieces: count, allFit, worst, failingPieces };
+  return { pieces: count, allFit: allFit && heightFits, worst, failingPieces, heightFits };
 }

@@ -72,6 +72,8 @@ export interface PrinterProfile {
   name: string;
   bedWidth: number;
   bedDepth: number;
+  bedHeight?: number; // mm build height; absent = unknown, height check skipped
+  margin?: number;    // mm print-head clearance per side; absent = BED_MARGIN default
 }
 
 export interface BedFitResult {
