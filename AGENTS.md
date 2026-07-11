@@ -64,6 +64,8 @@ Create a dedicated feature branch in a new Git worktree based on the latest `ori
 
 Use short, imperative commit subjects. Pull requests should describe user-visible changes, list validation commands, link related issues, and include screenshots or recordings for UI changes. For geometry or export changes, call out printability and manifold implications.
 
+Use `--body-file` for multiline `gh` pull-request bodies and comments. Do not embed escaped `\\n` sequences in shell arguments because GitHub renders them as literal text.
+
 ## Known Limitations
 
 STL is the only wired export format. Babylon.js imports are broad and may be optimized later if bundle size becomes a priority.
