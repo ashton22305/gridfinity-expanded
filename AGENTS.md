@@ -60,6 +60,8 @@ When a changed path is not safely recognized, classify it conservatively. Keep d
 
 ## Pull Requests
 
+Create a dedicated feature branch in a new Git worktree based on the latest `origin/main`, and make changes in that worktree rather than directly on `main`. Open pull requests with `main` as the target branch.
+
 Use short, imperative commit subjects. Pull requests should describe user-visible changes, list validation commands, link related issues, and include screenshots or recordings for UI changes. For geometry or export changes, call out printability and manifold implications.
 
 ## Known Limitations
