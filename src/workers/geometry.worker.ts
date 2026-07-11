@@ -1,5 +1,8 @@
 /// <reference lib="webworker" />
-import { generateBinPieces, generateBinPiecesJscad } from '../lib/geometry/gridfinity';
+import {
+  generateBinPieces,
+  generateBinPiecesJscad,
+} from '../lib/geometry/gridfinity';
 import { initManifold } from '../lib/geometry/manifold';
 // Vite resolves this to the hashed, base-path-aware asset URL for the WASM binary.
 import wasmUrl from 'manifold-3d/manifold.wasm?url';

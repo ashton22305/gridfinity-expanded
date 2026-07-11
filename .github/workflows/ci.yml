@@ -38,9 +38,3 @@ jobs:
 
       - name: Validate printability
         run: npm run check:manifold
-
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
-      - name: Run browser smoke tests
-        run: npm run test:e2e

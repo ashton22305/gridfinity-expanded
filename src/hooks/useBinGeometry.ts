@@ -51,7 +51,8 @@ export function useBinGeometry(config: BinConfig): GeometryState {
       const data = e.data;
       if (data.requestId !== requestIdRef.current) return; // superseded — discard stale result
       if (data.ok) {
-        setState({ previews: data.previews, pieces: data.pieces, generating: false, error: null });
+        setState({ previews: data.previews, pieces: data.pieces,
+          generating: false, error: null });
       } else {
         setState((s) => ({ ...s, generating: false, error: data.error }));
       }

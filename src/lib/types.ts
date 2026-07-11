@@ -79,4 +79,7 @@ export interface BedFitResult {
   binWidth: number;
   binDepth: number;
   rotated?: boolean;
+  bin?: number; // logical bin id; present when checking bin-tagged cells spanning multiple bins
+  col?: number; // split-piece column; present when returned from checkPieceFit
+  row?: number; // split-piece row; present when returned from checkPieceFit
 }

@@ -40,6 +40,15 @@ function splitFragments(cells: GridCell[]): Fragment[] {
   return fragments;
 }
 
+function groupFragments(fragments: Fragment[]): Map<string, Fragment[]> {
+  const groups = new Map<string, Fragment[]>();
+  for (const fragment of fragments) {
+    const key = lineKey(fragment);
+    groups.set(key, [...(groups.get(key) ?? []), fragment]);
+  }
+  return groups;
+}
+
 export function SplitTab() {
   const { config, updateBin, printer, gridCols, gridRows } = useAppStore();
   const cells = flattenBins(config.bins);
@@ -53,7 +62,10 @@ export function SplitTab() {
   }
 
   function toggle(bin: LogicalBin, line: SplitLine) {
-    if (bin.isManual) updateBin(bin.id, { splitLines: toggleSplitLine(bin.splitLines, line) });
+    updateBin(bin.id, {
+      isManual: true,
+      splitLines: toggleSplitLine(bin.splitLines, line),
+    });
   }
 
   return (
@@ -87,23 +99,32 @@ export function SplitTab() {
       <EditorCanvas gridCols={gridCols} gridRows={gridRows} cells={cells}>
         {config.bins.flatMap((bin) => {
           const active = new Set(bin.splitLines.map(lineKey));
-          return splitFragments(bin.cells).map((fragment) => {
-            const isActive = active.has(lineKey(fragment));
-            const p = { x1: fragment.x1, y1: fragment.y1, x2: fragment.x2, y2: fragment.y2 };
+          const groups = groupFragments(splitFragments(bin.cells));
+          return [...groups.entries()].map(([key, fragments]) => {
+            const line = fragments[0];
+            const isActive = active.has(key);
             return (
               <g
-                key={`${bin.id}:${fragment.key}`}
-                className={bin.isManual ? 'split-line' : 'split-line is-static'}
-                onClick={bin.isManual ? () => toggle(bin, fragment) : undefined}
+                key={`${bin.id}:${key}`}
+                className="split-line"
+                onClick={() => toggle(bin, line)}
               >
-                <line {...p} className="split-line-hit" />
-                <line
-                  {...p}
-                  className={`split-line-visible ${isActive
-                    ? 'split-line-visible--active'
-                    : 'split-line-visible--inactive'}`}
-                  style={isActive ? { stroke: binColor(bin.id) } : undefined}
-                />
+                {fragments.map((fragment) => {
+                  const p = { x1: fragment.x1, y1: fragment.y1,
+                    x2: fragment.x2, y2: fragment.y2 };
+                  return (
+                    <g key={fragment.key}>
+                      <line {...p} className="split-line-hit" />
+                      <line
+                        {...p}
+                        className={`split-line-visible ${isActive
+                          ? 'split-line-visible--active'
+                          : 'split-line-visible--inactive'}`}
+                        style={isActive ? { stroke: binColor(bin.id) } : undefined}
+                      />
+                    </g>
+                  );
+                })}
               </g>
             );
           });

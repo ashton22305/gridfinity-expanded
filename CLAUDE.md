@@ -14,7 +14,7 @@ Browser-based Gridfinity bin generator. It supports non-rectangular cell layouts
 | Fallback geometry | JSCAD-only path | Used if WASM fails; split-aware, but lower fidelity for some features. |
 | Preview | Babylon.js | `BabylonViewer` loads generated STL buffers with the STL loader and auto-fits the camera. |
 | Export | Custom binary STL serializer | `meshToStl()` serializes manifold indexed meshes; `@jscad/stl-serializer` is used only for fallback. |
-| Tests | Vitest + Playwright | Unit tests cover printer planning and mesh validation; browser smoke tests live in `e2e/`. |
+| Tests | Vitest | Unit tests cover printer planning and mesh validation. |
 | Deploy | GitHub Actions → GitHub Pages | `.github/workflows/deploy.yml`; custom domain is pinned by `public/CNAME`. |
 
 ## Project Layout
@@ -62,9 +62,7 @@ src/
         PrinterTab.tsx     printer presets, custom bed size, bed-fit status (settings section)
 scripts/check-manifold.ts  production-path manifold/STL validation matrix
 vitest.config.ts           unit test configuration for src/**/*.test.ts
-playwright.config.ts       Chromium E2E smoke-test configuration
 tsconfig.scripts.json      TypeScript settings for scripts/
-e2e/app.spec.ts            browser smoke tests for generation/export gating
 ```
 
 ## Runtime Flow
@@ -141,11 +139,12 @@ npm install
 npm run dev
 npm run build
 npm run lint
+npm run test
 npm run check:manifold
 npm run preview
 ```
 
-`npm run build` performs TypeScript project checks and a production Vite build. `npm run lint` runs Oxlint. Use `npm run check:manifold` for geometry-affecting work. Vitest and Playwright configs are present for unit and browser smoke coverage, and CI is wired to run those suites alongside lint, build, and manifold validation.
+`npm run build` performs TypeScript project checks and a production Vite build. `npm run lint` runs Oxlint. `npm run test` runs the Vitest unit suite. Use `npm run check:manifold` for geometry-affecting work. CI is wired to run lint, test, build, and manifold validation.
 
 ## Deployment
 

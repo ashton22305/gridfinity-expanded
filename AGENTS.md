@@ -6,7 +6,7 @@ This repository is a React 19 + Vite 6 TypeScript app for generating and exporti
 
 Domain logic lives in `src/lib/`: shared config/types in `types.ts`, edge helpers in `edges.ts`, split/logical-bin helpers in `split.ts`, printer fit logic in `printers.ts`, geometry builders and mesh validation helpers in `geometry/`, and STL download/serialization in `export/stl.ts`. Geometry runs in `src/workers/geometry.worker.ts`, driven by the debounced hook in `src/hooks/useBinGeometry.ts`.
 
-UI is under `src/components/`. The AppShell has two resizable side panels around the viewer: the left sidebar (`Sidebar.tsx`) hosts the spatial editor tabs `ShapeTab`, `WallsTab`, and `SplitTab`, while the right settings panel (`SettingsPanel.tsx`) stacks the parameter-form sections `PrinterTab`, `DimensionsTab`, and `FeaturesTab` in one scroll view. All six components live in `src/components/sidebar/tabs/`, and both panels resize through `PanelResizeHandle.tsx` with widths owned by the store (`panelWidths`). `BabylonViewer.tsx` previews generated STL buffers. Static deployment assets are in `public/`; validation utilities are in `scripts/`; Vitest unit tests live beside source files as `*.test.ts`, and Playwright smoke tests live in `e2e/`.
+UI is under `src/components/`. The AppShell has two resizable side panels around the viewer: the left sidebar (`Sidebar.tsx`) hosts the spatial editor tabs `ShapeTab`, `WallsTab`, and `SplitTab`, while the right settings panel (`SettingsPanel.tsx`) stacks the parameter-form sections `PrinterTab`, `DimensionsTab`, and `FeaturesTab` in one scroll view. All six components live in `src/components/sidebar/tabs/`, and both panels resize through `PanelResizeHandle.tsx` with widths owned by the store (`panelWidths`). `BabylonViewer.tsx` previews generated STL buffers. Static deployment assets are in `public/`; validation utilities are in `scripts/`; Vitest unit tests live beside source files as `*.test.ts`.
 
 ## Build, Test, and Development Commands
 
@@ -14,10 +14,11 @@ UI is under `src/components/`. The AppShell has two resizable side panels around
 - `npm run dev`: start Vite with hot reload.
 - `npm run build`: run TypeScript project checks and build `dist/`.
 - `npm run lint`: run Oxlint.
+- `npm run test`: run the Vitest unit suite.
 - `npm run check:manifold`: bundle and run the production-path geometry/STL manifold validation matrix.
 - `npm run preview`: serve the production build locally.
 
-For non-trivial changes, run `npm run build` and `npm run lint`. For geometry, split, STL export, printer-fit, or config-shape changes, also run `npm run check:manifold`. Vitest and Playwright configuration is present for unit and browser smoke coverage; CI runs those suites alongside lint, build, and manifold validation.
+For non-trivial changes, run `npm run build`, `npm run lint`, and `npm run test`. For geometry, split, STL export, printer-fit, or config-shape changes, also run `npm run check:manifold`. CI runs lint, test, build, and manifold validation.
 
 ## Coding Style & Naming Conventions
 
