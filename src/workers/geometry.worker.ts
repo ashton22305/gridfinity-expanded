@@ -13,7 +13,7 @@ import type { BinConfig } from '../lib/types';
 const manifoldReady = initManifold(() => wasmUrl).catch(() => null);
 
 interface PieceBuffers {
-  previews: { bin: number; buffer: ArrayBuffer }[];
+  previews: { bin: number; piece: number; pieceCount: number; buffer: ArrayBuffer }[];
   pieces: { name: string; buffer: ArrayBuffer }[];
 }
 
@@ -33,11 +33,12 @@ function jscadStl(geoms: unknown[]): ArrayBuffer {
 /** JSCAD fallback: split-aware generation via @jscad/stl-serializer. */
 function jscadPieces(config: BinConfig): PieceBuffers {
   const parts = generateBinPiecesJscad(config);
-  const binIds = [...new Set(parts.map((p) => p.bin))];
   return {
-    previews: binIds.map((bin) => ({
-      bin,
-      buffer: jscadStl(parts.filter((p) => p.bin === bin).map((p) => p.previewGeom)),
+    previews: parts.map((part) => ({
+      bin: part.bin,
+      piece: part.piece,
+      pieceCount: part.pieceCount,
+      buffer: jscadStl([part.previewGeom]),
     })),
     pieces: parts.map((p) => ({ name: p.name, buffer: jscadStl([p.exportGeom]) })),
   };
@@ -53,6 +54,8 @@ self.onmessage = async (e: MessageEvent<{ config: BinConfig; requestId: number }
       result = {
         previews: previews.map((p) => ({
           bin: p.bin,
+          piece: p.piece,
+          pieceCount: p.pieceCount,
           buffer: meshToStl(p.mesh.vertProperties, p.mesh.triVerts),
         })),
         pieces: pieces.map((p) => ({

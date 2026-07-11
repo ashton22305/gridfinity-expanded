@@ -57,8 +57,6 @@ const FASTENER_INSET = 13.0;   // ±mm from cell centre to pocket centre
 
 const CSG_EPSILON = 0.01;      // overlap to prevent coplanar faces in boolean ops
 
-const EXPLODE_GAP = 4;         // preview gap between split pieces, per split line
-
 // Free-form inner walls: embedded into the floor for a solid union, with a
 // concave quarter-round ramp (radius TRANSITION_R, clamped to the available
 // headroom) wherever a lower wall meets taller structure.
@@ -642,22 +640,6 @@ function mirrorMeshY(mesh: BinMesh, offset: number): BinMesh {
   return { vertProperties: vp, triVerts: tv };
 }
 
-function concatMeshes(meshes: BinMesh[]): BinMesh {
-  if (meshes.length === 1) return meshes[0];
-  const vertTotal = meshes.reduce((n, m) => n + m.vertProperties.length, 0);
-  const triTotal = meshes.reduce((n, m) => n + m.triVerts.length, 0);
-  const vertProperties = new Float32Array(vertTotal);
-  const triVerts = new Uint32Array(triTotal);
-  let vOff = 0, tOff = 0;
-  for (const m of meshes) {
-    vertProperties.set(m.vertProperties, vOff * 3);
-    for (let i = 0; i < m.triVerts.length; i++) triVerts[tOff + i] = m.triVerts[i] + vOff;
-    vOff += m.vertProperties.length / 3;
-    tOff += m.triVerts.length;
-  }
-  return { vertProperties, triVerts };
-}
-
 function pieceName(binIdx: number, binCount: number, i: number, n: number): string {
   const stem = binCount === 1 ? 'gridfinity-bin' : `gridfinity-bin-${binIdx + 1}`;
   return n === 1 ? `${stem}.stl` : `${stem}-piece-${i + 1}-of-${n}.stl`;
@@ -701,7 +683,9 @@ export interface BinPiece {
 
 export interface BinPreview {
   bin: number;     // logical bin id, so the viewer can color-match the editors
-  mesh: BinMesh;   // whole-layout coordinates, exploded, mirrored to match the canvas
+  piece: number;   // zero-based piece id, retained for deferred seam rendering
+  pieceCount: number;
+  mesh: BinMesh;   // whole-layout coordinates, assembled, mirrored to match the canvas
 }
 
 /**
@@ -711,10 +695,8 @@ export interface BinPreview {
  * glued pieces form one continuous bin; edges between DIFFERENT logical bins
  * are ordinary perimeter walls. Every piece keeps its own base pegs.
  *
- * The previews show the pieces in layout coordinates, exploded by EXPLODE_GAP
- * per split-grid position so seams are visible (adjacent logical bins stay in
- * place — they are already separate solids), one concatenated mesh per logical
- * bin so the viewer can color-match the editors.
+ * Preview pieces stay in their exact assembled layout coordinates and remain
+ * separate so the viewer can identify their shared seams in its G-buffer.
  *
  * Every output mesh (pieces and previews) is mirrored via mirrorMeshY so the
  * part matches the canvas drawing instead of its chiral mirror.
@@ -724,7 +706,10 @@ export function generateBinPieces(
 ): { pieces: BinPiece[]; previews: BinPreview[] } {
   if (config.bins.length === 0) {
     const mesh = generateBinManifold(wasm, config);
-    return { pieces: [{ name: pieceName(0, 1, 0, 1), col: 0, row: 0, mesh }], previews: [{ bin: 0, mesh }] };
+    return {
+      pieces: [{ name: pieceName(0, 1, 0, 1), col: 0, row: 0, mesh }],
+      previews: [{ bin: 0, piece: 0, pieceCount: 1, mesh }],
+    };
   }
 
   const allCells = flattenBins(config.bins);
@@ -733,12 +718,10 @@ export function generateBinPieces(
   const pieces: BinPiece[] = [];
   const previews: BinPreview[] = [];
   const partsByBin = bins.map((bin) => partitionCells(bin.cells, bin.splitLines));
-  const anySplit = partsByBin.some((parts) => parts.length > 1);
   bins.forEach((bin, bi) => {
     const parts = partsByBin[bi];
     // Whole-bin spec profile, built once and shared by every piece of this bin.
     const binOuterCS = geom2ToCrossSection(wasm, buildOuterProfile(bin.cells));
-    const binPreviewMeshes: BinMesh[] = [];
     parts.forEach((part, i) => {
       const solid = generatePieceManifold(
         wasm, config, part.cells, bin.cells, binOuterCS,
@@ -755,11 +738,13 @@ export function generateBinPieces(
           translateMesh(mesh, -minX * GRID_PITCH, -minY * GRID_PITCH),
           (maxY - minY + 1) * GRID_PITCH),
       });
-      binPreviewMeshes.push(mirrorMeshY(anySplit
-        ? translateMesh(mesh, part.col * EXPLODE_GAP, part.row * EXPLODE_GAP)
-        : mesh, layoutH));
+      previews.push({
+        bin: bin.id,
+        piece: i,
+        pieceCount: parts.length,
+        mesh: mirrorMeshY(mesh, layoutH),
+      });
     });
-    previews.push({ bin: bin.id, mesh: concatMeshes(binPreviewMeshes) });
   });
 
   return { pieces, previews };
@@ -936,8 +921,10 @@ export function generateBin(config: BinConfig): Geom3 {
 export interface BinPieceGeom {
   name: string;
   bin: number;         // logical bin id, so the viewer can color-match the editors
+  piece: number;
+  pieceCount: number;
   exportGeom: Geom3;   // piece-local coordinates, print-ready
-  previewGeom: Geom3;  // whole-bin coordinates, exploded
+  previewGeom: Geom3;  // whole-bin coordinates, assembled
 }
 
 /**
@@ -947,13 +934,12 @@ export interface BinPieceGeom {
 export function generateBinPiecesJscad(config: BinConfig): BinPieceGeom[] {
   if (config.bins.length === 0) {
     const geom = generateBin(config);
-    return [{ name: pieceName(0, 1, 0, 1), bin: 0, exportGeom: geom, previewGeom: geom }];
+    return [{ name: pieceName(0, 1, 0, 1), bin: 0, piece: 0, pieceCount: 1, exportGeom: geom, previewGeom: geom }];
   }
   const allCells = flattenBins(config.bins);
   const layoutH = (Math.max(...allCells.map((c) => c.y)) + 1) * GRID_PITCH;
   const bins = config.bins;
   const partsByBin = bins.map((bin) => partitionCells(bin.cells, bin.splitLines));
-  const anySplit = partsByBin.some((parts) => parts.length > 1);
   return bins.flatMap((bin, bi) => {
     const parts = partsByBin[bi];
     // Whole-bin spec profile, built once and shared by every piece of this bin.
@@ -965,15 +951,14 @@ export function generateBinPiecesJscad(config: BinConfig): BinPieceGeom[] {
       const minY = Math.min(...part.cells.map((c) => c.y));
       const maxY = Math.max(...part.cells.map((c) => c.y));
       const local = transforms.translate([-minX * GRID_PITCH, -minY * GRID_PITCH, 0], geom) as Geom3;
-      const placed = anySplit
-        ? transforms.translate([part.col * EXPLODE_GAP, part.row * EXPLODE_GAP, 0], geom) as Geom3
-        : geom;
       return {
         name: pieceName(bi, bins.length, i, parts.length),
         bin: bin.id,
+        piece: i,
+        pieceCount: parts.length,
         exportGeom: transforms.translate([0, (maxY - minY + 1) * GRID_PITCH, 0],
           transforms.mirrorY(local)) as Geom3,
-        previewGeom: transforms.translate([0, layoutH, 0], transforms.mirrorY(placed)) as Geom3,
+        previewGeom: transforms.translate([0, layoutH, 0], transforms.mirrorY(geom)) as Geom3,
       };
     });
   });

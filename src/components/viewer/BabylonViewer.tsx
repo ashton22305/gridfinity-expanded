@@ -15,6 +15,9 @@ import {
   Animation,
   CubicEase,
   EasingFunction,
+  Effect,
+  GeometryBufferRenderer,
+  PostProcess,
   type AbstractMesh,
 } from '@babylonjs/core';
 import { STLFileLoader } from '@babylonjs/loaders/STL';
@@ -37,6 +40,57 @@ const DEFAULT_RADIUS = 140;
 const FIT_MARGIN = 1.08;   // headroom so the model doesn't touch the viewport edge
 const ANIM_FPS = 60;
 const ANIM_FRAMES = 36;    // 0.6 s ease-in-out
+
+// Deferred split-seam appearance. These are intentionally centralized here so
+// the preview treatment can be tuned without touching geometry generation.
+const SPLIT_SEAM_COLOR = new Color3(1, 0.03, 0.01);
+const SPLIT_SEAM_WIDTH_PX = 1.25;
+const SPLIT_SEAM_GLOW_RADIUS_PX = 6;
+const SPLIT_SEAM_GLOW_INTENSITY = 0.8;
+
+const SPLIT_ID_BASE = 0.125;
+const SPLIT_ID_STEP = 1 / 512;
+
+Effect.ShadersStore.splitSeamFragmentShader = `
+precision highp float;
+varying vec2 vUV;
+uniform sampler2D textureSampler;
+uniform sampler2D splitIdSampler;
+uniform vec2 texelSize;
+uniform vec3 seamColor;
+uniform vec3 seamParams;
+
+float seamAt(vec2 uv, vec2 offset, vec2 centerId) {
+  vec2 sampleUv = uv + offset * texelSize;
+  vec2 otherId = texture2D(splitIdSampler, sampleUv).rg;
+  // Babylon writes StandardMaterial specular colors to the reflectivity
+  // attachment in linear space, so the encoded 0.125 base arrives near 0.014.
+  float sameBin = 1.0 - step(0.0001, abs(centerId.r - otherId.r));
+  float differentPiece = step(0.0001, abs(centerId.g - otherId.g));
+  float validIds = step(0.005, centerId.r) * step(0.005, otherId.r);
+  return sameBin * differentPiece * validIds;
+}
+
+float ring(vec2 uv, vec2 centerId, float radius) {
+  vec2 x = vec2(radius, 0.0);
+  vec2 y = vec2(0.0, radius);
+  return max(
+    max(seamAt(uv, x, centerId), seamAt(uv, -x, centerId)),
+    max(seamAt(uv, y, centerId), seamAt(uv, -y, centerId))
+  );
+}
+
+void main(void) {
+  vec4 base = texture2D(textureSampler, vUV);
+  vec2 centerId = texture2D(splitIdSampler, vUV).rg;
+  float core = ring(vUV, centerId, seamParams.x);
+  float nearGlow = ring(vUV, centerId, (seamParams.x + seamParams.y) * 0.5);
+  float farGlow = ring(vUV, centerId, seamParams.y);
+  float glow = max(nearGlow * seamParams.z, farGlow * seamParams.z * 0.35);
+  float strength = clamp(max(core, glow), 0.0, 1.0);
+  gl_FragColor = vec4(mix(base.rgb, seamColor, strength), base.a);
+}
+`;
 
 interface Props {
   previews: PreviewStl[];
@@ -138,6 +192,34 @@ export function BabylonViewer({ previews, error }: Props) {
     camera.wheelDeltaPercentage = 0.01;
     cameraRef.current = camera;
 
+    // The reflectivity attachment is repurposed as a per-piece ID buffer. The
+    // final post-process compares neighboring IDs after ordinary scene shading.
+    const geometryBuffer = scene.enableGeometryBufferRenderer();
+    if (geometryBuffer) {
+      geometryBuffer.enableReflectivity = true;
+      const splitIdIndex = geometryBuffer.getTextureIndex(GeometryBufferRenderer.REFLECTIVITY_TEXTURE_TYPE);
+      const seamPass = new PostProcess(
+        'split-seam',
+        'splitSeam',
+        ['texelSize', 'seamColor', 'seamParams'],
+        ['splitIdSampler'],
+        1,
+        camera,
+      );
+      seamPass.onApply = (effect) => {
+        const gBuffer = geometryBuffer.getGBuffer();
+        effect.setTexture('splitIdSampler', gBuffer.textures[splitIdIndex]);
+        effect.setFloat2('texelSize', 1 / engine.getRenderWidth(), 1 / engine.getRenderHeight());
+        effect.setColor3('seamColor', SPLIT_SEAM_COLOR);
+        effect.setFloat3(
+          'seamParams',
+          SPLIT_SEAM_WIDTH_PX,
+          SPLIT_SEAM_GLOW_RADIUS_PX,
+          SPLIT_SEAM_GLOW_INTENSITY,
+        );
+      };
+    }
+
     // Hemispheric light: high groundColor so downward-facing surfaces (peg undersides) are lit.
     const ambient = new HemisphericLight('ambient', new Vector3(0, 1, 0), scene);
     ambient.intensity = 0.45;
@@ -184,7 +266,7 @@ export function BabylonViewer({ previews, error }: Props) {
       try {
         const { meshes } = await SceneLoader.ImportMeshAsync('', url, '', scene, null, '.stl');
         meshes.forEach((m) => m.setEnabled(false)); // hidden until the whole swap commits
-        return { bin: p.bin, meshes };
+        return { ...p, meshes };
       } finally {
         URL.revokeObjectURL(url);
       }
@@ -192,10 +274,20 @@ export function BabylonViewer({ previews, error }: Props) {
       .then((groups) => {
         const loaded: AbstractMesh[] = [];
         const materials: StandardMaterial[] = [];
-        groups.forEach(({ bin, meshes }) => {
-          const mat = new StandardMaterial(`bin-${bin}`, scene);
+        const splitBins = [...new Set(groups.filter((g) => g.pieceCount > 1).map((g) => g.bin))];
+        groups.forEach(({ bin, piece, pieceCount, meshes }) => {
+          const mat = new StandardMaterial(`bin-${bin}-piece-${piece}`, scene);
           mat.diffuseColor = Color3.FromHexString(binColor(bin));
-          mat.specularColor = new Color3(0.15, 0.15, 0.15);
+          if (pieceCount > 1) {
+            const groupId = splitBins.indexOf(bin) + 1;
+            mat.specularColor = new Color3(
+              SPLIT_ID_BASE + groupId * SPLIT_ID_STEP,
+              SPLIT_ID_BASE + (piece + 1) * SPLIT_ID_STEP,
+              0.15,
+            );
+          } else {
+            mat.specularColor = new Color3(0, 0, 0.15);
+          }
           materials.push(mat);
           meshes.forEach((m) => {
             m.material = mat;

@@ -10,6 +10,8 @@ export interface PieceStl {
 
 export interface PreviewStl {
   bin: number;
+  piece: number;
+  pieceCount: number;
   buffer: ArrayBuffer;
 }
 
