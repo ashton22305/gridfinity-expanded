@@ -1,6 +1,6 @@
-import type { GridCell, PrinterProfile, BedFitResult, SplitLine } from './types';
+import type { GridCell, LogicalBin, PrinterProfile, BedFitResult, SplitLine } from './types';
 import { GRID_PITCH } from './geometry/gridfinity';
-import { partitionCells, sortSplitLines, groupBins } from './split';
+import { partitionCells, sortSplitLines } from './split';
 
 export const PRINTER_PROFILES: PrinterProfile[] = [
   { name: 'Bambu Lab A1 Mini', bedWidth: 180, bedDepth: 180 },
@@ -38,13 +38,16 @@ export function checkBedFit(
   const { widthCells, depthCells } = getGridFootprintCells(cells);
   const binWidth = widthCells * GRID_PITCH;
   const binDepth = depthCells * GRID_PITCH;
+  const normal = binWidth + BED_MARGIN * 2 <= printer.bedWidth &&
+    binDepth + BED_MARGIN * 2 <= printer.bedDepth;
+  const rotated = binDepth + BED_MARGIN * 2 <= printer.bedWidth &&
+    binWidth + BED_MARGIN * 2 <= printer.bedDepth;
 
   return {
-    fits:
-      binWidth + BED_MARGIN * 2 <= printer.bedWidth &&
-      binDepth + BED_MARGIN * 2 <= printer.bedDepth,
+    fits: normal || rotated,
     binWidth,
     binDepth,
+    rotated: !normal && rotated,
   };
 }
 
@@ -76,36 +79,72 @@ export function computeAutoSplitLines(
   const minX = Math.min(...xs), minY = Math.min(...ys);
   const { widthCells, depthCells } = getGridFootprintCells(cells);
 
-  return sortSplitLines([
-    ...axisSplitIndices(minX, widthCells, maxCellsForBed(printer.bedWidth))
+  const candidate = (bedWidth: number, bedDepth: number): SplitLine[] => sortSplitLines([
+    ...axisSplitIndices(minX, widthCells, maxCellsForBed(bedWidth))
       .map((index): SplitLine => ({ axis: 'x', index })),
-    ...axisSplitIndices(minY, depthCells, maxCellsForBed(printer.bedDepth))
+    ...axisSplitIndices(minY, depthCells, maxCellsForBed(bedDepth))
       .map((index): SplitLine => ({ axis: 'y', index })),
   ]);
+  const plans = [
+    candidate(printer.bedWidth, printer.bedDepth),
+    candidate(printer.bedDepth, printer.bedWidth),
+  ];
+  const score = (lines: SplitLine[]): [number, number, number] => {
+    const pieces = partitionCells(cells, lines);
+    const worstArea = Math.max(0, ...pieces.map((piece) => {
+      const fit = checkBedFit(piece.cells, printer);
+      return fit.fits ? fit.binWidth * fit.binDepth : Number.POSITIVE_INFINITY;
+    }));
+    return [pieces.length, lines.length, worstArea];
+  };
+  return plans.sort((a, b) => {
+    const sa = score(a), sb = score(b);
+    return sa[0] - sb[0] || sa[1] - sb[1] || sa[2] - sb[2];
+  })[0];
 }
 
 export interface PieceFitResult {
   pieces: number;
   allFit: boolean;
   worst: BedFitResult;
+  failingPieces: BedFitResult[];
 }
 
 /** Bed fit across all pieces (every logical bin × its split chunks). */
 export function checkPieceFit(
-  cells: GridCell[],
-  splitLines: SplitLine[],
-  printer: PrinterProfile,
+  bins: LogicalBin[], printer: PrinterProfile,
+): PieceFitResult;
+/** @deprecated Compatibility overload for callers migrating from global lines. */
+export function checkPieceFit(
+  cells: GridCell[], splitLines: SplitLine[], printer: PrinterProfile,
+): PieceFitResult;
+export function checkPieceFit(
+  binsOrCells: LogicalBin[] | GridCell[],
+  printerOrLines: PrinterProfile | SplitLine[],
+  legacyPrinter?: PrinterProfile,
 ): PieceFitResult {
+  const legacy = legacyPrinter !== undefined;
+  const printer = legacy ? legacyPrinter : printerOrLines as PrinterProfile;
+  const bins: LogicalBin[] = legacy
+    ? [{ id: 0, cells: binsOrCells as GridCell[], isManual: true, splitLines: printerOrLines as SplitLine[] }]
+    : binsOrCells as LogicalBin[];
   let worst: BedFitResult = { fits: true, binWidth: 0, binDepth: 0 };
   let allFit = true;
   let count = 0;
-  for (const bin of groupBins(cells)) {
-    for (const piece of partitionCells(bin.cells, splitLines)) {
+  const failingPieces: BedFitResult[] = [];
+  for (const bin of bins) {
+    for (const piece of partitionCells(bin.cells, bin.splitLines)) {
       count++;
       const fit = checkBedFit(piece.cells, printer);
-      if (!fit.fits) allFit = false;
-      if (fit.binWidth * fit.binDepth >= worst.binWidth * worst.binDepth) worst = fit;
+      if (!fit.fits) {
+        allFit = false;
+        failingPieces.push(fit);
+      }
+      if ((!fit.fits && worst.fits) ||
+          (fit.fits === worst.fits && fit.binWidth * fit.binDepth >= worst.binWidth * worst.binDepth)) {
+        worst = fit;
+      }
     }
   }
-  return { pieces: count, allFit, worst };
+  return { pieces: count, allFit, worst, failingPieces };
 }

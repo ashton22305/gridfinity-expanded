@@ -12,7 +12,7 @@
 import { generateBinManifold, generateBinPieces } from '../src/lib/geometry/gridfinity';
 import { initManifold, type BinMesh } from '../src/lib/geometry/manifold';
 import { meshToStl } from '../src/lib/export/stl';
-import type { BinConfig, GridCell, GridEdge } from '../src/lib/types';
+import type { BinConfig, BinSlope, GridCell, GridEdge, SplitLine } from '../src/lib/types';
 
 interface Report {
   triangles: number;
@@ -171,14 +171,37 @@ const disjoint: GridCell[] = [{ x: 0, y: 0 }, { x: 2, y: 0 }];                  
 const h = (x: number, y: number): GridEdge => ({ orientation: 'h', x, y });
 const v = (x: number, y: number): GridEdge => ({ orientation: 'v', x, y });
 
-const base: Omit<BinConfig, 'cells'> = {
+type LegacyCell = GridCell & { bin?: number };
+type LegacyConfig = Omit<BinConfig, 'bins'> & {
+  cells: LegacyCell[];
+  splitMode?: 'auto' | 'manual';
+  splitLines?: SplitLine[];
+  baseSlopes?: (BinSlope & { bin: number })[];
+};
+
+function migrateFixture(config: LegacyConfig): BinConfig {
+  const grouped = new Map<number, GridCell[]>();
+  for (const { bin = 0, x, y } of config.cells) {
+    grouped.set(bin, [...(grouped.get(bin) ?? []), { x, y }]);
+  }
+  const { cells: _cells, splitMode: _mode, splitLines = [], baseSlopes = [], ...global } = config;
+  return {
+    ...global,
+    bins: [...grouped.entries()].sort(([a], [b]) => a - b).map(([id, cells]) => ({
+      id, cells, isManual: true, splitLines,
+      slope: baseSlopes.find((s) => s.bin === id),
+    })),
+  };
+}
+
+const base: Omit<LegacyConfig, 'cells'> = {
   heightUnits: 3, wallThickness: 1.2, cavityCornerRadius: 3.75, innerFilletRadius: 0.5,
   magnetHoles: true, screwHoles: false,
   openEdges: [], dividerEdges: [], innerWalls: [], splitMode: 'manual', splitLines: [],
   baseSlopes: [],
 };
 
-const cases: { name: string; config: BinConfig }[] = [
+const cases: { name: string; config: LegacyConfig }[] = [
   { name: '1x1 default',         config: { ...base, cells: rect(1, 1) } },
   { name: '2x2 default',         config: { ...base, cells: rect(2, 2) } },
   { name: '3x2 default',         config: { ...base, cells: rect(3, 2) } },
@@ -246,7 +269,7 @@ const cases: { name: string; config: BinConfig }[] = [
 const U: GridCell[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 0, y: 1 }, { x: 2, y: 1 }];
 
 // Split cases: every exported piece must independently pass all checks.
-const splitCases: { name: string; config: BinConfig }[] = [
+const splitCases: { name: string; config: LegacyConfig }[] = [
   { name: '6x1 split in 2',      config: { ...base, cells: rect(6, 1), splitLines: [{ axis: 'x', index: 3 }] } },
   { name: '4x2 divider on seam', config: { ...base, cells: rect(4, 2), splitLines: [{ axis: 'x', index: 2 }], dividerEdges: [v(2, 0), v(2, 1)] } },
   { name: 'L split (empty box)', config: { ...base, cells: L, splitLines: [{ axis: 'x', index: 1 }, { axis: 'y', index: 1 }] } },
@@ -277,7 +300,7 @@ const splitCases: { name: string; config: BinConfig }[] = [
 
   for (const { name, config } of cases) {
     try {
-      check(name, generateBinManifold(wasm, config));
+      check(name, generateBinManifold(wasm, migrateFixture(config)));
     } catch (err) {
       anyBad = true;
       console.log(`${name.padEnd(28)} ERROR: ${String(err)}`);
@@ -286,7 +309,7 @@ const splitCases: { name: string; config: BinConfig }[] = [
 
   for (const { name, config } of splitCases) {
     try {
-      const { pieces } = generateBinPieces(wasm, config);
+      const { pieces } = generateBinPieces(wasm, migrateFixture(config));
       for (const piece of pieces) {
         check(`${name} [${piece.name.replace('gridfinity-bin-', '').replace('.stl', '')}]`, piece.mesh);
       }

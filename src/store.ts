@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import type { BinConfig, GridCell, PrinterProfile, SplitLine } from './lib/types';
+import type { BinConfig, GridCell, LogicalBin, PrinterProfile, SplitLine } from './lib/types';
 import { PRINTER_PROFILES, computeAutoSplitLines } from './lib/printers';
+import { flattenBins, sortSplitLines } from './lib/split';
 
 const DEFAULT_PRINTER = PRINTER_PROFILES[5]; // Prusa MK4 / MK3S+
 
@@ -34,12 +35,12 @@ export function minGridSize(cells: GridCell[]): { cols: number; rows: number } {
 }
 
 const DEFAULT_CONFIG: BinConfig = {
-  cells: [
-    { x: 0, y: 0 },
-    { x: 1, y: 0 },
-    { x: 0, y: 1 },
-    { x: 1, y: 1 },
-  ],
+  bins: [{
+    id: 0,
+    cells: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: 1, y: 1 }],
+    isManual: false,
+    splitLines: [],
+  }],
   heightUnits: 3,
   wallThickness: 1.2,
   cavityCornerRadius: 2.5, // ≈ the interior look of the spec 3.75 mm outer corner minus one wall
@@ -49,9 +50,6 @@ const DEFAULT_CONFIG: BinConfig = {
   openEdges: [],
   dividerEdges: [],
   innerWalls: [],
-  splitMode: 'auto',
-  splitLines: [],
-  baseSlopes: [],
 };
 
 function sameSplitLines(a: SplitLine[], b: SplitLine[]): boolean {
@@ -59,18 +57,22 @@ function sameSplitLines(a: SplitLine[], b: SplitLine[]): boolean {
     a.every((l, i) => l.axis === b[i].axis && l.index === b[i].index);
 }
 
-/**
- * In auto split mode, `splitLines` is always derived from the shape and the
- * printer bed. Applied on every config/printer write so the stored config is
- * always the effective one the geometry consumes. Returns the input config
- * unchanged when the lines are already current, so no-op writes keep the same
- * config identity and don't ripple into re-renders or geometry rebuilds.
- */
+/** Keep one bin's effective lines current while preserving object identity on no-ops. */
+function withEffectiveSplit(bin: LogicalBin, printer: PrinterProfile): LogicalBin {
+  const lines = bin.isManual
+    ? bin.splitLines.filter((line) => {
+        const coords = bin.cells.map((cell) => line.axis === 'x' ? cell.x : cell.y);
+        return coords.some((coord) => coord < line.index) && coords.some((coord) => coord >= line.index);
+      })
+    : computeAutoSplitLines(bin.cells, printer);
+  return sameSplitLines(lines, bin.splitLines) ? bin : { ...bin, splitLines: lines };
+}
+
+/** Re-derive every bin after a printer change or whole-shape replacement. */
 function withAutoSplit(config: BinConfig, printer: PrinterProfile): BinConfig {
-  if (config.splitMode !== 'auto') return config;
-  const lines = computeAutoSplitLines(config.cells, printer);
-  if (sameSplitLines(lines, config.splitLines)) return config;
-  return { ...config, splitLines: lines };
+  const bins = config.bins.map((bin) => withEffectiveSplit(bin, printer));
+  const changed = bins.some((bin, i) => bin !== config.bins[i]);
+  return changed ? { ...config, bins } : config;
 }
 
 interface AppState {
@@ -82,6 +84,7 @@ interface AppState {
   /** Side panel widths in px — purely a UI concern, not part of the geometry config. */
   panelWidths: Record<PanelSide, number>;
   updateConfig: (patch: Partial<BinConfig>) => void;
+  updateBin: (id: number, patch: Partial<LogicalBin>) => void;
   setPrinter: (printer: PrinterProfile) => void;
   setGridSize: (cols: number, rows: number) => void;
   setPanelWidth: (panel: PanelSide, width: number) => void;
@@ -95,14 +98,31 @@ export const useAppStore = create<AppState>((set) => ({
   panelWidths: DEFAULT_PANEL_WIDTHS,
 
   updateConfig: (patch) =>
-    set((s) => ({ config: withAutoSplit({ ...s.config, ...patch }, s.printer) })),
+    set((s) => {
+      const config = { ...s.config, ...patch };
+      return { config: patch.bins ? withAutoSplit(config, s.printer) : config };
+    }),
+
+  updateBin: (id, patch) =>
+    set((s) => {
+      const bins = s.config.bins.map((bin) => {
+        if (bin.id !== id) return bin;
+        const updated = {
+          ...bin,
+          ...patch,
+          splitLines: patch.splitLines ? sortSplitLines(patch.splitLines) : bin.splitLines,
+        };
+        return withEffectiveSplit(updated, s.printer);
+      });
+      return { config: { ...s.config, bins } };
+    }),
 
   setPrinter: (printer) =>
     set((s) => ({ printer, config: withAutoSplit(s.config, printer) })),
 
   setGridSize: (cols, rows) =>
     set((s) => {
-      const min = minGridSize(s.config.cells);
+      const min = minGridSize(flattenBins(s.config.bins));
       return {
         gridCols: Math.min(MAX_GRID, Math.max(min.cols, Math.round(cols))),
         gridRows: Math.min(MAX_GRID, Math.max(min.rows, Math.round(rows))),

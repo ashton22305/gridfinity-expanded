@@ -2,7 +2,7 @@ import { primitives, booleans, expansions, extrusions, transforms, hulls, measur
 import type { ManifoldToplevel, Manifold, CrossSection } from 'manifold-3d';
 import type { BinConfig, BinSlope, GridCell, InnerWall, SlopeDir } from '../types';
 import { effectiveWalls, edgeInsideCell, cellSet, type EffectiveWalls } from '../edges';
-import { partitionCells, groupBins } from '../split';
+import { flattenBins, partitionCells } from '../split';
 import { geom3ToManifold, geom2ToCrossSection, manifoldMesh, type BinMesh } from './manifold';
 
 // ── Spec constants ─────────────────────────────────────────────────────────────
@@ -89,11 +89,6 @@ function innerWallTop(w: InnerWall, floorZ: number, totalHeight: number): number
   const cavityDepth = totalHeight - floorZ;
   if (w.height == null || w.height >= cavityDepth) return totalHeight;
   return floorZ + Math.max(0.5, w.height);
-}
-
-/** Per-bin slope entry lookup (first match wins; absent = flat). */
-function slopeForBin(config: BinConfig, binId: number): BinSlope | undefined {
-  return (config.baseSlopes ?? []).find((s) => s.bin === binId);
 }
 
 /** Unit 2D ascent direction of the sloped base (floor rises AWAY from the low side). */
@@ -686,13 +681,13 @@ function pieceName(binIdx: number, binCount: number, i: number, n: number): stri
  * mesh. Use generateBinPieces for the split-aware path.
  */
 export function generateBinManifold(wasm: ManifoldToplevel, config: BinConfig): BinMesh {
-  if (config.cells.length === 0) {
+  if (config.bins.length === 0) {
     return manifoldMesh(geom3ToManifold(wasm, primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3));
   }
-  const solids = groupBins(config.cells).map((bin) => {
+  const solids = config.bins.map((bin) => {
     const binOuterCS = geom2ToCrossSection(wasm, buildOuterProfile(bin.cells));
     return generatePieceManifold(wasm, config, bin.cells, bin.cells, binOuterCS,
-      resolveWalls(bin.cells, bin.cells, config), slopeForBin(config, bin.id));
+      resolveWalls(bin.cells, bin.cells, config), bin.slope);
   });
   return manifoldMesh(solids.length === 1 ? solids[0] : wasm.Manifold.union(solids));
 }
@@ -710,7 +705,7 @@ export interface BinPreview {
 }
 
 /**
- * Split-aware build: partitions each logical bin's cells by config.splitLines
+ * Split-aware build: partitions each logical bin by its owned split lines
  * and generates every piece as an independent watertight solid. Seam faces
  * are open (walled only where the user placed a divider on the split line) so
  * glued pieces form one continuous bin; edges between DIFFERENT logical bins
@@ -727,16 +722,17 @@ export interface BinPreview {
 export function generateBinPieces(
   wasm: ManifoldToplevel, config: BinConfig,
 ): { pieces: BinPiece[]; previews: BinPreview[] } {
-  if (config.cells.length === 0) {
+  if (config.bins.length === 0) {
     const mesh = generateBinManifold(wasm, config);
     return { pieces: [{ name: pieceName(0, 1, 0, 1), col: 0, row: 0, mesh }], previews: [{ bin: 0, mesh }] };
   }
 
-  const layoutH = (Math.max(...config.cells.map((c) => c.y)) + 1) * GRID_PITCH;
-  const bins = groupBins(config.cells);
+  const allCells = flattenBins(config.bins);
+  const layoutH = (Math.max(...allCells.map((c) => c.y)) + 1) * GRID_PITCH;
+  const bins = config.bins;
   const pieces: BinPiece[] = [];
   const previews: BinPreview[] = [];
-  const partsByBin = bins.map((bin) => partitionCells(bin.cells, config.splitLines ?? []));
+  const partsByBin = bins.map((bin) => partitionCells(bin.cells, bin.splitLines));
   const anySplit = partsByBin.some((parts) => parts.length > 1);
   bins.forEach((bin, bi) => {
     const parts = partsByBin[bi];
@@ -746,7 +742,7 @@ export function generateBinPieces(
     parts.forEach((part, i) => {
       const solid = generatePieceManifold(
         wasm, config, part.cells, bin.cells, binOuterCS,
-        resolveWalls(part.cells, bin.cells, config), slopeForBin(config, bin.id));
+        resolveWalls(part.cells, bin.cells, config), bin.slope);
       const mesh = manifoldMesh(solid);
       const minX = Math.min(...part.cells.map((c) => c.x));
       const minY = Math.min(...part.cells.map((c) => c.y));
@@ -930,10 +926,10 @@ function generatePieceJscad(
 
 /** JSCAD-only fallback for the whole layout (ignores split lines). */
 export function generateBin(config: BinConfig): Geom3 {
-  if (config.cells.length === 0) return primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3;
-  const solids = groupBins(config.cells).map((bin) =>
+  if (config.bins.length === 0) return primitives.cuboid({ size: [1, 1, 1], center: [0, 0, 0.5] }) as Geom3;
+  const solids = config.bins.map((bin) =>
     generatePieceJscad(config, bin.cells, bin.cells, buildOuterProfile(bin.cells),
-      resolveWalls(bin.cells, bin.cells, config), slopeForBin(config, bin.id)));
+      resolveWalls(bin.cells, bin.cells, config), bin.slope));
   return union(solids);
 }
 
@@ -949,13 +945,14 @@ export interface BinPieceGeom {
  * across Y (same rationale as mirrorMeshY) so the part matches the canvas.
  */
 export function generateBinPiecesJscad(config: BinConfig): BinPieceGeom[] {
-  if (config.cells.length === 0) {
+  if (config.bins.length === 0) {
     const geom = generateBin(config);
     return [{ name: pieceName(0, 1, 0, 1), bin: 0, exportGeom: geom, previewGeom: geom }];
   }
-  const layoutH = (Math.max(...config.cells.map((c) => c.y)) + 1) * GRID_PITCH;
-  const bins = groupBins(config.cells);
-  const partsByBin = bins.map((bin) => partitionCells(bin.cells, config.splitLines ?? []));
+  const allCells = flattenBins(config.bins);
+  const layoutH = (Math.max(...allCells.map((c) => c.y)) + 1) * GRID_PITCH;
+  const bins = config.bins;
+  const partsByBin = bins.map((bin) => partitionCells(bin.cells, bin.splitLines));
   const anySplit = partsByBin.some((parts) => parts.length > 1);
   return bins.flatMap((bin, bi) => {
     const parts = partsByBin[bi];
@@ -963,7 +960,7 @@ export function generateBinPiecesJscad(config: BinConfig): BinPieceGeom[] {
     const binOuterProfile = buildOuterProfile(bin.cells);
     return parts.map((part, i) => {
       const geom = generatePieceJscad(config, part.cells, bin.cells, binOuterProfile,
-        resolveWalls(part.cells, bin.cells, config), slopeForBin(config, bin.id));
+        resolveWalls(part.cells, bin.cells, config), bin.slope);
       const minX = Math.min(...part.cells.map((c) => c.x));
       const minY = Math.min(...part.cells.map((c) => c.y));
       const maxY = Math.max(...part.cells.map((c) => c.y));

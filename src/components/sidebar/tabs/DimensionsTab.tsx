@@ -1,7 +1,6 @@
 import { ColorSwatch, Select, Stack } from '@mantine/core';
 import type { BinSlope, SlopeDir } from '../../../lib/types';
 import { BASE_TOTAL_HEIGHT, HEIGHT_PER_UNIT } from '../../../lib/geometry/gridfinity';
-import { groupBins } from '../../../lib/split';
 import { useAppStore } from '../../../store';
 import { binColor } from '../binColors';
 import { Hint } from '../../ui/Field';
@@ -15,21 +14,16 @@ const SLOPE_DIRS: { value: SlopeDir; label: string }[] = [
 ];
 
 export function DimensionsTab() {
-  const { config, updateConfig } = useAppStore();
+  const { config, updateConfig, updateBin } = useAppStore();
   const totalHeightMm = (BASE_TOTAL_HEIGHT + config.heightUnits * HEIGHT_PER_UNIT).toFixed(2);
-  const bins = groupBins(config.cells);
+  const bins = config.bins;
 
   const slopeFor = (id: number): BinSlope =>
-    config.baseSlopes.find((s) => s.bin === id) ?? { bin: id, angle: 0, dir: '+y' };
+    bins.find((bin) => bin.id === id)?.slope ?? { angle: 0, dir: '+y' };
 
   function setSlope(id: number, patch: Partial<BinSlope>) {
     const next = { ...slopeFor(id), ...patch };
-    const rest = config.baseSlopes.filter((s) => s.bin !== id);
-    // "absent = flat" — never persist a zero-angle entry (keeps the config clean
-    // and avoids stale bin ids lingering after a bin is repainted).
-    updateConfig({
-      baseSlopes: (next.angle > 0 ? [...rest, next] : rest).sort((a, b) => a.bin - b.bin),
-    });
+    updateBin(id, { slope: next.angle > 0 ? next : undefined });
   }
 
   return (
