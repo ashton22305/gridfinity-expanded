@@ -22,7 +22,7 @@ Use Mantine controls and layout primitives before custom UI. Put cross-app contr
 
 Tabs read and write through `useAppStore()`. Bin-owned state must go through `updateBin()` so automatic split lines remain effective. Keep `BinConfig` plain and structured-clone compatible for worker messages.
 
-The manifold path (`generateBinPieces()` / `generateBinManifold()`) is the production geometry path. Author geometry with native `manifold-3d` `CrossSection` and `Manifold` operations. Preserve `manifoldMesh()` in the export path because it welds vertices and repairs float32-degenerate slivers.
+The manifold path (`generateBinPieces()` / `generateBinManifold()`) is the production geometry path. Author geometry with native `manifold-3d` `CrossSection` and `Manifold` operations. Preserve `manifoldMesh()` and final-coordinate `repairMesh()` calls in the export path because they weld vertices and repair float32-degenerate slivers after mesh generation or coordinate transforms.
 
 The editors map SVG y downward to mm +y, so generated output is mirrored across Y at the geometry boundary. Do not compensate for orientation in the viewer. Split seam edges are open unless a divider lies on the seam. Combine solids with manifold booleans, use `CrossSection.offset` for inward 2D offsets, feed manifold individually closed primitives, and use a small overlap such as `CSG_EPSILON` where non-identical flush coordinates could create membranes.
 
