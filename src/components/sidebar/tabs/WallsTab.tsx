@@ -17,10 +17,13 @@ interface Pt { x: number; y: number }
 
 const snapMm = (mm: number) => Math.round(mm * 2) / 2;
 
-// Drawing aids: endpoints magnetize to grid lines, grid intersections, and
-// existing custom walls within GRID_SNAP_MM, and the segment locks to 45°
-// increments when the drag is within ANGLE_SNAP_RAD of one.
-const GRID_SNAP_MM = 3;
+// Drawing aids: endpoints magnetize to grid intersections and custom-wall
+// endpoints within POINT_SNAP_MM, to points along grid lines and existing
+// walls within LINE_SNAP_MM, and the segment locks to 45° increments when the
+// drag is within ANGLE_SNAP_RAD of one. Points snap harder than lines so
+// corners and wall ends win when both are in range.
+const POINT_SNAP_MM = 6;
+const LINE_SNAP_MM = 4;
 const ANGLE_SNAP_RAD = (7 * Math.PI) / 180;
 
 // Max perpendicular distance (mm) from the pointer to a grid line for a press
@@ -33,7 +36,7 @@ const MOVE_THRESHOLD_MM = 2.5;
 
 function gridSnap(mm: number): number {
   const line = Math.round(mm / GRID_PITCH) * GRID_PITCH;
-  return Math.abs(mm - line) <= GRID_SNAP_MM ? line : snapMm(mm);
+  return Math.abs(mm - line) <= LINE_SNAP_MM ? line : snapMm(mm);
 }
 
 /** Closest point to p on segment w, with its distance. */
@@ -61,7 +64,7 @@ function nearestWall(p: Pt, walls: InnerWall[]): number | null {
 
 /**
  * Point snap tier: custom-wall endpoints and grid intersections within
- * GRID_SNAP_MM of p, nearest first. These beat line and 45° snaps so free
+ * POINT_SNAP_MM of p, nearest first. These beat line and 45° snaps so free
  * walls join cleanly at corners and existing wall ends.
  */
 function pointSnap(p: Pt, walls: InnerWall[]): Pt | null {
@@ -71,11 +74,11 @@ function pointSnap(p: Pt, walls: InnerWall[]): Pt | null {
   ]);
   const ix = Math.round(p.x / GRID_PITCH) * GRID_PITCH;
   const iy = Math.round(p.y / GRID_PITCH) * GRID_PITCH;
-  if (Math.abs(p.x - ix) <= GRID_SNAP_MM && Math.abs(p.y - iy) <= GRID_SNAP_MM) {
+  if (Math.abs(p.x - ix) <= POINT_SNAP_MM && Math.abs(p.y - iy) <= POINT_SNAP_MM) {
     candidates.push({ x: ix, y: iy });
   }
   let best: Pt | null = null;
-  let bestDist = GRID_SNAP_MM;
+  let bestDist = POINT_SNAP_MM;
   for (const c of candidates) {
     const dist = Math.hypot(p.x - c.x, p.y - c.y);
     if (dist <= bestDist) {
@@ -93,7 +96,7 @@ function snapPoint(p: Pt, walls: InnerWall[]): Pt {
   let best: { x: number; y: number; dist: number } | null = null;
   for (const w of walls) {
     const c = closestOnWall(p, w);
-    if (c.dist <= GRID_SNAP_MM && (!best || c.dist < best.dist)) best = c;
+    if (c.dist <= LINE_SNAP_MM && (!best || c.dist < best.dist)) best = c;
   }
   if (best) return { x: snapMm(best.x), y: snapMm(best.y) };
   return { x: gridSnap(p.x), y: gridSnap(p.y) };
@@ -170,6 +173,49 @@ export function WallsTab() {
   const svgRef = useRef<SVGSVGElement>(null);
   const [gesture, setGesture] = useState<Gesture | null>(null);
   const [selectedWall, setSelectedWall] = useState<number | null>(null);
+
+  // Cell membership for confining custom walls to the bins' footprint.
+  const cellSet = useMemo(
+    () => new Set(flattenBins(config.bins).map((c) => `${c.x},${c.y}`)),
+    [config.bins],
+  );
+
+  /**
+   * Whether a whole-bin mm point lies inside (or on the boundary of) any bin
+   * cell. The small tolerance lets points exactly on a shared or perimeter
+   * grid line count as inside, so walls can end on the outer wall.
+   */
+  function insideBins(p: Pt): boolean {
+    const eps = 0.01;
+    for (const cx of [Math.floor((p.x - eps) / GRID_PITCH), Math.floor((p.x + eps) / GRID_PITCH)]) {
+      for (const cy of [Math.floor((p.y - eps) / GRID_PITCH), Math.floor((p.y + eps) / GRID_PITCH)]) {
+        if (cellSet.has(`${cx},${cy}`)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Clamp a draft endpoint so the whole segment from `from` stays inside the
+   * bins: walk the segment in small steps and keep the farthest point before
+   * it first leaves the footprint (which also stops segments from cutting
+   * across notches in concave shapes).
+   */
+  function clampToBins(from: Pt, to: Pt): Pt {
+    const len = Math.hypot(to.x - from.x, to.y - from.y);
+    const steps = Math.max(1, Math.ceil(len / 0.25));
+    let last = from;
+    for (let k = 1; k <= steps; k++) {
+      const t = k / steps;
+      const q = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+      if (!insideBins(q)) {
+        const r = { x: snapMm(last.x), y: snapMm(last.y) };
+        return insideBins(r) ? r : last;
+      }
+      last = q;
+    }
+    return to; // fully inside — keep the snapped endpoint exactly
+  }
 
   const hasOverrides = openEdges.length > 0 || dividerEdges.length > 0;
   const cavityDepth = HEIGHT_PER_UNIT * config.heightUnits - FLOOR_THICKNESS;
@@ -311,10 +357,14 @@ export function WallsTab() {
     if (edgeHit || wallHit != null) {
       // Wait for movement (or release) to decide what this press means.
       setGesture({ kind: 'pending', start: p, edgeHit, wallHit });
-    } else {
+    } else if (insideBins(p)) {
       const s = snapPoint(p, innerWalls);
       setGesture({ kind: 'free', draft: { x1: s.x, y1: s.y, x2: s.x, y2: s.y } });
       setSelectedWall(null);
+    } else {
+      // Presses outside the bins' footprint start nothing.
+      setSelectedWall(null);
+      return;
     }
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
   }
@@ -345,9 +395,11 @@ export function WallsTab() {
         });
       } else {
         const s = snapPoint(gesture.start, innerWalls);
+        const end = snapEnd(s.x, s.y, p, innerWalls);
+        const c = clampToBins(s, { x: end.x2, y: end.y2 });
         setGesture({
           kind: 'free',
-          draft: { x1: s.x, y1: s.y, ...snapEnd(s.x, s.y, p, innerWalls) },
+          draft: { x1: s.x, y1: s.y, x2: c.x, y2: c.y },
         });
       }
       setSelectedWall(null);
@@ -356,9 +408,11 @@ export function WallsTab() {
       if (endCell !== gesture.endCell) setGesture({ ...gesture, endCell });
     } else {
       const { draft } = gesture;
+      const end = snapEnd(draft.x1, draft.y1, p, innerWalls);
+      const c = clampToBins({ x: draft.x1, y: draft.y1 }, { x: end.x2, y: end.y2 });
       setGesture({
         ...gesture,
-        draft: { ...draft, ...snapEnd(draft.x1, draft.y1, p, innerWalls) },
+        draft: { ...draft, x2: c.x, y2: c.y },
       });
     }
   }
@@ -463,11 +517,21 @@ export function WallsTab() {
           );
         })}
         {draft && (
-          <line
-            className="custom-wall--draft"
-            x1={mmToSvg(draft.x1)} y1={mmToSvg(draft.y1)}
-            x2={mmToSvg(draft.x2)} y2={mmToSvg(draft.y2)}
-          />
+          <g>
+            <line
+              className="custom-wall--draft"
+              x1={mmToSvg(draft.x1)} y1={mmToSvg(draft.y1)}
+              x2={mmToSvg(draft.x2)} y2={mmToSvg(draft.y2)}
+            />
+            <circle
+              className="custom-wall-endpoint"
+              cx={mmToSvg(draft.x1)} cy={mmToSvg(draft.y1)} r={4}
+            />
+            <circle
+              className="custom-wall-endpoint"
+              cx={mmToSvg(draft.x2)} cy={mmToSvg(draft.y2)} r={4}
+            />
+          </g>
         )}
       </EditorCanvas>
       <Group gap="md">

@@ -131,6 +131,15 @@
   stroke-linecap: round;
 }
 
+/* Endpoint markers rendered only while a custom wall is being drawn, so the
+   snapped ends of the draft are visible during the drag. */
+.custom-wall-endpoint {
+  pointer-events: none;
+  fill: var(--mantine-color-teal-3);
+  stroke: var(--mantine-color-dark-7);
+  stroke-width: 1;
+}
+
 /* ── Split lines (Split tab) ─────────────────────────────── */
 .split-line {
   cursor: pointer;
