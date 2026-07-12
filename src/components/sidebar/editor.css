@@ -68,18 +68,11 @@
   stroke: var(--divider-color);
   stroke-width: 4;
 }
-.edge:hover .edge-line--divider {
-  stroke: var(--mantine-color-blue-5);
-}
 
 .edge-line--ghost {
   stroke: var(--mantine-color-dark-3);
   stroke-width: 1.5;
   stroke-dasharray: 2 4;
-}
-.edge:hover .edge-line--ghost {
-  stroke: var(--mantine-color-blue-6);
-  stroke-width: 3;
 }
 
 /* Grid-drag preview: shows each touched edge in the state it will end in,
