@@ -53,9 +53,10 @@ const CSG_EPSILON = 0.01;      // overlap to prevent coplanar faces in boolean o
 const PREVIEW_INSET = 0.15;    // per side; adjacent split pieces show a 0.3 mm gap
 
 
-// Free-form inner walls: embedded into the floor for a solid union, with a
-// concave quarter-round ramp (radius TRANSITION_R, clamped to the available
-// headroom) wherever a lower wall meets taller structure.
+// Free-form inner walls: embedded into the floor for a solid union, with the
+// configured cavity fillet at their base and a concave quarter-round ramp
+// (radius TRANSITION_R, clamped to the available headroom) wherever a lower
+// wall meets taller structure.
 const WALL_EMBED   = 0.5;
 const TRANSITION_R = 4;
 
@@ -409,7 +410,10 @@ function buildCavityManifold(
  * profile, so an end that reaches a wall overlaps into it and fuses cleanly;
  * at open faces the wall ends flush with the cut plane).
  *
- * Where a wall is lower than the rim, a stack of slabs above its top traces a
+ * A spherical sweep around each wall footprint adds the configured cavity
+ * fillet at the floor junction. The sweep is clipped to the cavity so it cannot
+ * cross an outer wall or protrude through an open face. Where a wall is lower
+ * than the rim, a stack of slabs above its top traces a
  * concave quarter-round ramp into everything taller that it touches: the
  * "material" region (outer walls + grid dividers = clip − cavity, plus any
  * taller inner wall's footprint) is dilated by the arc inset at each slab
@@ -419,7 +423,7 @@ function buildCavityManifold(
  */
 function buildInnerWallsManifold(
   wasm: ManifoldToplevel, walls: InnerWall[], clipCS: CrossSection, cavityCS: CrossSection,
-  totalHeight: number,
+  totalHeight: number, filletR: number,
 ): Manifold[] {
   const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
   const planned: { footprint: CrossSection; top: number }[] = [];
@@ -436,6 +440,20 @@ function buildInnerWallsManifold(
   planned.forEach((w, i) => {
     const bottom = floorZ - WALL_EMBED;
     solids.push(w.footprint.extrude(w.top - bottom).translate([0, 0, bottom]));
+
+    const baseFilletR = Math.min(filletR, w.top - floorZ);
+    if (baseFilletR > 0) {
+      // The upper hemisphere of a sphere centred on the floor has the desired
+      // concave profile: maximum reach at floorZ, tapering to the wall face at
+      // floorZ + R. The existing embedded prism supplies real overlap below and
+      // through the sweep, including where multiple wall footprints cross.
+      const seed = w.footprint.extrude(CSG_EPSILON)
+        .translate([0, 0, floorZ - CSG_EPSILON / 2]);
+      const swept = seed.minkowskiSum(wasm.Manifold.sphere(baseFilletR, FILLET_SEGMENTS));
+      const cavityClip = cavityCS.extrude(baseFilletR + CSG_EPSILON)
+        .translate([0, 0, floorZ]);
+      solids.push(swept.intersect(cavityClip));
+    }
 
     const headroom = totalHeight - w.top;
     if (headroom < 0.05) return;  // full height (or as good as): nothing to blend into
@@ -545,7 +563,7 @@ function generatePieceManifold(
     // sloped-base wedge. All overlap into existing material (floor embed, wall
     // band clip), so the unions fuse through real volume.
     const additions: Manifold[] = buildInnerWallsManifold(
-      wasm, config.innerWalls ?? [], outerCS, cavity.cs, totalHeight);
+      wasm, config.innerWalls ?? [], outerCS, cavity.cs, totalHeight, filletR);
     const wedge = buildSlopedBaseManifold(slope, binCells, outerCS, cavity.cs, totalHeight);
     if (wedge) additions.push(wedge);
     if (additions.length) bin = Manifold.union([bin, ...additions]);

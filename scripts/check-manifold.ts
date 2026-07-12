@@ -236,6 +236,7 @@ const cases: { name: string; config: LegacyConfig }[] = [
   { name: '3x3 rc20 + dividers', config: { ...base, cells: rect(3, 3), cavityCornerRadius: 20, dividerEdges: [v(1, 0), v(1, 1), v(1, 2)] } },
   { name: 'rc20 fillet10 thick', config: { ...base, cells: rect(2, 2), cavityCornerRadius: 20, innerFilletRadius: 10, wallThickness: 4 } },
   // Free-form inner walls
+  { name: 'wall sharp base',     config: { ...base, cells: rect(2, 2), innerFilletRadius: 0, innerWalls: [{ x1: 6, y1: 42, x2: 78, y2: 42, width: 1.6, height: null }] } },
   { name: 'diag wall full',      config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 6, y1: 6, x2: 78, y2: 78, width: 1.6, height: null }] } },
   { name: 'low wall ramps',      config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 0, y1: 40, x2: 84, y2: 44, width: 2, height: 8 }] } },
   { name: 'low wall to open',    config: { ...base, cells: rect(1, 1), openEdges: [v(1, 0)], innerWalls: [{ x1: 0, y1: 21, x2: 42, y2: 21, width: 1.2, height: 6 }] } },
@@ -243,6 +244,10 @@ const cases: { name: string; config: LegacyConfig }[] = [
   { name: 'crossing wall hts',   config: { ...base, cells: rect(2, 2), innerWalls: [
       { x1: 0, y1: 21, x2: 84, y2: 21, width: 1.6, height: 6 },
       { x1: 43, y1: 0, x2: 41, y2: 84, width: 2, height: 14 },
+    ] } },
+  { name: 'crossing wall fillet', config: { ...base, cells: rect(2, 2), innerFilletRadius: 3, innerWalls: [
+      { x1: 6, y1: 42, x2: 78, y2: 42, width: 1.6, height: null },
+      { x1: 42, y1: 6, x2: 42, y2: 78, width: 1.6, height: null },
     ] } },
   { name: 'wall rc20 fillet6',   config: { ...base, cells: rect(2, 2), cavityCornerRadius: 20, innerFilletRadius: 6, innerWalls: [{ x1: 0, y1: 30, x2: 84, y2: 60, width: 1.6, height: 8 }] } },
   { name: 'wall in wall band',   config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 0, y1: 0.5, x2: 84, y2: 0.5, width: 1, height: null }] } },
