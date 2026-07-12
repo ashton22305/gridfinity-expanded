@@ -154,7 +154,7 @@ type Gesture =
       line: number;
       startCell: number; endCell: number;
     }
-  | { kind: 'free'; draft: Draft; cursor: Pt };
+  | { kind: 'free'; draft: Draft };
 
 /** Shared width for the compact wall width/height number fields. */
 const WALL_DIMENSION_INPUT_WIDTH = 56;
@@ -172,6 +172,7 @@ export function WallsTab() {
   const cells = flattenBins(config.bins);
   const svgRef = useRef<SVGSVGElement>(null);
   const [gesture, setGesture] = useState<Gesture | null>(null);
+  const [hoverStart, setHoverStart] = useState<Pt | null>(null);
   const [selectedWall, setSelectedWall] = useState<number | null>(null);
 
   // Cell membership for confining custom walls to the bins' footprint.
@@ -352,6 +353,7 @@ export function WallsTab() {
 
   function down(e: React.PointerEvent) {
     const p = svgPoint(e);
+    setHoverStart(null);
     const edgeHit = nearestEdge(p);
     const wallHit = nearestWall(p, innerWalls);
     if (edgeHit || wallHit != null) {
@@ -362,7 +364,6 @@ export function WallsTab() {
       setGesture({
         kind: 'free',
         draft: { x1: s.x, y1: s.y, x2: s.x, y2: s.y },
-        cursor: p,
       });
       setSelectedWall(null);
     } else {
@@ -374,8 +375,11 @@ export function WallsTab() {
   }
 
   function move(e: React.PointerEvent) {
-    if (!gesture) return;
     const p = svgPoint(e);
+    if (!gesture) {
+      setHoverStart(insideBins(p) ? snapPoint(p, innerWalls) : null);
+      return;
+    }
     if (gesture.kind === 'pending') {
       const dx = p.x - gesture.start.x, dy = p.y - gesture.start.y;
       if (Math.hypot(dx, dy) < MOVE_THRESHOLD_MM) return;
@@ -404,7 +408,6 @@ export function WallsTab() {
         setGesture({
           kind: 'free',
           draft: { x1: s.x, y1: s.y, x2: c.x, y2: c.y },
-          cursor: p,
         });
       }
       setSelectedWall(null);
@@ -418,7 +421,6 @@ export function WallsTab() {
       setGesture({
         ...gesture,
         draft: { ...draft, x2: c.x, y2: c.y },
-        cursor: p,
       });
     }
   }
@@ -480,7 +482,6 @@ export function WallsTab() {
       : (gridGesture.adding ? 'edge-line--divider' : 'edge-line--ghost')
     : '';
   const draft = gesture?.kind === 'free' ? gesture.draft : null;
-  const draftCursor = gesture?.kind === 'free' ? gesture.cursor : null;
 
   return (
     <Stack className="no-select" gap="sm">
@@ -500,6 +501,7 @@ export function WallsTab() {
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}
+        onPointerLeave={() => setHoverStart(null)}
       >
         {edgeElements}
         {gridGesture && spanEdges(gridGesture).map((e) => (
@@ -540,13 +542,13 @@ export function WallsTab() {
               className="custom-wall-endpoint"
               cx={mmToSvg(draft.x2)} cy={mmToSvg(draft.y2)} r={4}
             />
-            {draftCursor && (
-              <circle
-                className="custom-wall-cursor"
-                cx={mmToSvg(draftCursor.x)} cy={mmToSvg(draftCursor.y)} r={3}
-              />
-            )}
           </g>
+        )}
+        {hoverStart && !gesture && (
+          <circle
+            className="custom-wall-endpoint"
+            cx={mmToSvg(hoverStart.x)} cy={mmToSvg(hoverStart.y)} r={4}
+          />
         )}
       </EditorCanvas>
       <Group gap="md">

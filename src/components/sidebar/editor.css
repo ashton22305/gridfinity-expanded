@@ -140,15 +140,6 @@
   stroke-width: 1;
 }
 
-/* Keep the physical pointer visible when the active endpoint is pulled to a
-   nearby snap target. */
-.custom-wall-cursor {
-  pointer-events: none;
-  fill: none;
-  stroke: var(--mantine-color-teal-3);
-  stroke-width: 1.5;
-}
-
 /* ── Split lines (Split tab) ─────────────────────────────── */
 .split-line {
   cursor: pointer;
