@@ -410,8 +410,8 @@ function buildCavityManifold(
  * profile, so an end that reaches a wall overlaps into it and fuses cleanly;
  * at open faces the wall ends flush with the cut plane).
  *
- * A spherical sweep around each wall footprint adds the configured cavity
- * fillet at the floor junction. The sweep is clipped to the cavity so it cannot
+ * Connected loft segments around each wall footprint add the configured cavity
+ * fillet at the floor junction. The round is clipped to the cavity so it cannot
  * cross an outer wall or protrude through an open face. Where a wall is lower
  * than the rim, a stack of slabs above its top traces a
  * concave quarter-round ramp into everything taller that it touches: the
@@ -426,13 +426,14 @@ function buildInnerWallsManifold(
   totalHeight: number, filletR: number,
 ): Manifold[] {
   const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
-  const planned: { footprint: CrossSection; top: number }[] = [];
+  const planned: { rawFootprint: CrossSection; footprint: CrossSection; top: number }[] = [];
   for (const w of walls) {
     const quad = innerWallQuad(w);
     if (!quad) continue;
-    const footprint = new wasm.CrossSection([quad]).intersect(clipCS);
+    const rawFootprint = new wasm.CrossSection([quad]);
+    const footprint = rawFootprint.intersect(clipCS);
     if (footprint.isEmpty()) continue;
-    planned.push({ footprint, top: innerWallTop(w, floorZ, totalHeight) });
+    planned.push({ rawFootprint, footprint, top: innerWallTop(w, floorZ, totalHeight) });
   }
 
   const solids: Manifold[] = [];
@@ -443,16 +444,28 @@ function buildInnerWallsManifold(
 
     const baseFilletR = Math.min(filletR, w.top - floorZ);
     if (baseFilletR > 0) {
-      // The upper hemisphere of a sphere centred on the floor has the desired
-      // concave profile: maximum reach at floorZ, tapering to the wall face at
-      // floorZ + R. The existing embedded prism supplies real overlap below and
-      // through the sweep, including where multiple wall footprints cross.
-      const seed = w.footprint.extrude(CSG_EPSILON)
-        .translate([0, 0, floorZ - CSG_EPSILON / 2]);
-      const swept = seed.minkowskiSum(wasm.Manifold.sphere(baseFilletR, FILLET_SEGMENTS));
+      // A concave quarter circle has maximum reach at the floor and becomes
+      // tangent to the wall at floorZ + R. Hull adjacent offset profiles into
+      // connected sloped facets so the result is a continuous round, not a
+      // staircase of horizontal shelves.
+      const steps = Math.min(48, Math.max(8, Math.ceil(baseFilletR * 8)));
+      const segments: Manifold[] = [];
+      const profileAt = (h: number) => {
+        const d = baseFilletR - Math.sqrt(Math.max(0, 2 * baseFilletR * h - h * h));
+        return d > 0.001 ? w.rawFootprint.offset(d, 'Round', 2, FILLET_SEGMENTS) : w.rawFootprint;
+      };
+      for (let s = 0; s < steps; s++) {
+        const h0 = baseFilletR * s / steps;
+        const h1 = baseFilletR * (s + 1) / steps;
+        const lower = profileAt(h0).extrude(CSG_EPSILON)
+          .translate([0, 0, floorZ + h0 - CSG_EPSILON / 2]);
+        const upper = profileAt(h1).extrude(CSG_EPSILON)
+          .translate([0, 0, floorZ + h1 - CSG_EPSILON / 2]);
+        segments.push(wasm.Manifold.hull([lower, upper]));
+      }
       const cavityClip = cavityCS.extrude(baseFilletR + CSG_EPSILON)
-        .translate([0, 0, floorZ]);
-      solids.push(swept.intersect(cavityClip));
+        .translate([0, 0, floorZ - CSG_EPSILON / 2]);
+      solids.push(wasm.Manifold.union(segments).intersect(cavityClip));
     }
 
     const headroom = totalHeight - w.top;
