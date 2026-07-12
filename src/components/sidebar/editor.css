@@ -45,9 +45,11 @@
   transition: stroke 100ms;
 }
 
+/* Outer walls render heavier than dividers so the perimeter reads as the
+   bin's boundary at a glance. */
 .edge-line--wall {
   stroke: var(--wall-color);
-  stroke-width: 4;
+  stroke-width: 5;
 }
 .edge:hover .edge-line--wall {
   stroke: var(--mantine-color-gray-3);
@@ -66,18 +68,25 @@
   stroke: var(--divider-color);
   stroke-width: 4;
 }
-.edge:hover .edge-line--divider {
-  stroke: var(--mantine-color-blue-5);
-}
 
 .edge-line--ghost {
   stroke: var(--mantine-color-dark-3);
   stroke-width: 1.5;
   stroke-dasharray: 2 4;
 }
-.edge:hover .edge-line--ghost {
-  stroke: var(--mantine-color-blue-6);
-  stroke-width: 3;
+
+/* Grid-drag preview: shows each touched edge in the state it will end in,
+   slightly translucent so it reads as pending until pointer-up commits. */
+.edge-line.edge-drag-preview {
+  pointer-events: none;
+  opacity: 0.85;
+  stroke-linecap: round;
+}
+
+/* The walls canvas is a drawing surface everywhere; edges keep their own
+   pointer cursor so the toggle affordance still reads. */
+.editor-svg--walls {
+  cursor: crosshair;
 }
 
 /* ── Custom (free-form) walls ────────────────────────────── */
@@ -87,12 +96,41 @@
   stroke-linecap: round;
 }
 
+.custom-wall-g {
+  cursor: pointer;
+}
+
+.custom-wall-hit {
+  stroke: transparent;
+  stroke-width: 12;
+  stroke-linecap: round;
+}
+
+.custom-wall--selected {
+  stroke: var(--mantine-color-teal-3);
+  filter: drop-shadow(0 0 3px var(--mantine-color-teal-5));
+}
+
+/* Custom-walls list row for the wall selected on the canvas. */
+.wall-row--selected {
+  outline: 1px solid var(--mantine-color-teal-5);
+}
+
 .custom-wall--draft {
   pointer-events: none;
   stroke: var(--mantine-color-teal-4);
   stroke-width: 3;
   stroke-dasharray: 5 4;
   stroke-linecap: round;
+}
+
+/* Endpoint markers rendered only while a custom wall is being drawn, so the
+   snapped ends of the draft are visible during the drag. */
+.custom-wall-endpoint {
+  pointer-events: none;
+  fill: var(--mantine-color-teal-3);
+  stroke: var(--mantine-color-dark-7);
+  stroke-width: 1;
 }
 
 /* ── Split lines (Split tab) ─────────────────────────────── */
@@ -189,4 +227,3 @@
 .cell.is-on:hover {
   filter: brightness(1.2);
 }
-
