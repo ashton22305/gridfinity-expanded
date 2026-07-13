@@ -33,9 +33,37 @@ const OUTER_R = PEG_R_TOP;
 export const FLOOR_THICKNESS = 1.2;
 
 // Floor fillet: concave quarter-circle at the cavity floor-to-wall junction.
-// A geodesic sphere sweeps an inset 2D cavity profile to form the continuous
-// round. This avoids the visible horizontal terraces produced by stacked slabs.
+// Adjacent offset profiles are lofted into connected facets so every wall uses
+// the same continuous round without the horizontal terraces of stacked slabs.
 const FILLET_SEGMENTS = 32;
+
+/** Build a continuous quarter-circle floor fillet from caller-supplied profiles. */
+function buildFloorFillet(
+  wasm: ManifoldToplevel, radius: number, floorZ: number,
+  profileAt: (distance: number) => CrossSection, clipCS: CrossSection,
+): Manifold | null {
+  if (radius <= 0) return null;
+  const steps = Math.min(48, Math.max(8, Math.ceil(radius * 8)));
+  const segments: Manifold[] = [];
+  for (let step = 0; step < steps; step++) {
+    const h0 = radius * step / steps;
+    const h1 = radius * (step + 1) / steps;
+    const distanceAt = (height: number) =>
+      radius - Math.sqrt(Math.max(0, 2 * radius * height - height * height));
+    const lowerProfile = profileAt(distanceAt(h0));
+    const upperProfile = profileAt(distanceAt(h1));
+    if (lowerProfile.isEmpty() || upperProfile.isEmpty()) continue;
+    const lower = lowerProfile.extrude(CSG_EPSILON)
+      .translate([0, 0, floorZ + h0 - CSG_EPSILON / 2]);
+    const upper = upperProfile.extrude(CSG_EPSILON)
+      .translate([0, 0, floorZ + h1 - CSG_EPSILON / 2]);
+    segments.push(wasm.Manifold.hull([lower, upper]));
+  }
+  if (!segments.length) return null;
+  const clip = clipCS.extrude(radius + CSG_EPSILON)
+    .translate([0, 0, floorZ - CSG_EPSILON / 2]);
+  return wasm.Manifold.union(segments).intersect(clip);
+}
 
 /** Clamp the configured fillet radius so it never exceeds the cavity depth. */
 function clampFilletR(requested: number, totalHeight: number): number {
@@ -344,7 +372,7 @@ function clampOpeningRadius(ext: CrossSection, rc: number): number {
 
 /**
  * Cavity solid (or null when the plan leaves no cavity, e.g. a wall thicker
- * than the cell): a spherical sweep forms the continuous concave floor fillet
+ * than the cell): a connected profile loft forms the continuous concave floor fillet
  * (floorZ → floorZ+filletR), capped by the straight column, which pokes
  * CSG_EPSILON past the rim so the top cut opens cleanly.
  *
@@ -353,8 +381,8 @@ function clampOpeningRadius(ext: CrossSection, rc: number): number {
  * to the real cavity: otherwise they would retreat from open/seam faces too,
  * growing ribs and floor bumps right where split pieces are glued together.
  * The final intersection preserves the "never breach a wall" invariant. The
- * sweep is a native 3D Minkowski sum, so its quarter-circle profile is made of
- * connected sloped facets instead of disconnected horizontal stair steps.
+ * loft uses the same quarter-circle builder as free-form inner walls, so all
+ * floor-to-wall junctions have matching connected facets.
  */
 function buildCavityManifold(
   wasm: ManifoldToplevel, plan: CavityPlan, rc: number, filletR: number, totalHeight: number,
@@ -386,18 +414,14 @@ function buildCavityManifold(
   const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
   const solids: Manifold[] = [];
   if (filletR > 0) {
-    const inset = opened.offset(-filletR, 'Miter', 2);
-    if (!inset.isEmpty()) {
-      // Put a seed face exactly on the fillet-to-column junction. Centering the
-      // thin seed across that plane makes the tessellated sphere interpolate
-      // between two equators, leaving a hairline recessed shelf at the join.
-      const sweepSeed = inset.extrude(CSG_EPSILON)
-        .translate([0, 0, floorZ + filletR]);
-      const swept = sweepSeed.minkowskiSum(wasm.Manifold.sphere(filletR, FILLET_SEGMENTS));
-      const cavityClip = cavityCS.extrude(filletR + CSG_EPSILON)
-        .translate([0, 0, floorZ]);
-      solids.push(swept.intersect(cavityClip));
-    }
+    const fillet = buildFloorFillet(
+      wasm, filletR, floorZ,
+      (distance) => distance > 0.001
+        ? opened.offset(-distance, 'Miter', 2).intersect(cavityCS)
+        : cavityCS,
+      cavityCS,
+    );
+    if (fillet) solids.push(fillet);
   }
   solids.push(cavityCS
     .extrude(totalHeight - floorZ - filletR + CSG_EPSILON)
@@ -444,28 +468,14 @@ function buildInnerWallsManifold(
 
     const baseFilletR = Math.min(filletR, w.top - floorZ);
     if (baseFilletR > 0) {
-      // A concave quarter circle has maximum reach at the floor and becomes
-      // tangent to the wall at floorZ + R. Hull adjacent offset profiles into
-      // connected sloped facets so the result is a continuous round, not a
-      // staircase of horizontal shelves.
-      const steps = Math.min(48, Math.max(8, Math.ceil(baseFilletR * 8)));
-      const segments: Manifold[] = [];
-      const profileAt = (h: number) => {
-        const d = baseFilletR - Math.sqrt(Math.max(0, 2 * baseFilletR * h - h * h));
-        return d > 0.001 ? w.rawFootprint.offset(d, 'Round', 2, FILLET_SEGMENTS) : w.rawFootprint;
-      };
-      for (let s = 0; s < steps; s++) {
-        const h0 = baseFilletR * s / steps;
-        const h1 = baseFilletR * (s + 1) / steps;
-        const lower = profileAt(h0).extrude(CSG_EPSILON)
-          .translate([0, 0, floorZ + h0 - CSG_EPSILON / 2]);
-        const upper = profileAt(h1).extrude(CSG_EPSILON)
-          .translate([0, 0, floorZ + h1 - CSG_EPSILON / 2]);
-        segments.push(wasm.Manifold.hull([lower, upper]));
-      }
-      const cavityClip = cavityCS.extrude(baseFilletR + CSG_EPSILON)
-        .translate([0, 0, floorZ - CSG_EPSILON / 2]);
-      solids.push(wasm.Manifold.union(segments).intersect(cavityClip));
+      const fillet = buildFloorFillet(
+        wasm, baseFilletR, floorZ,
+        (distance) => distance > 0.001
+          ? w.rawFootprint.offset(distance, 'Round', 2, FILLET_SEGMENTS)
+          : w.rawFootprint,
+        cavityCS,
+      );
+      if (fillet) solids.push(fillet);
     }
 
     const headroom = totalHeight - w.top;
