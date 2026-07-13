@@ -53,11 +53,19 @@ function buildFloorFillet(
     const lowerProfile = profileAt(distanceAt(h0));
     const upperProfile = profileAt(distanceAt(h1));
     if (lowerProfile.isEmpty() || upperProfile.isEmpty()) continue;
-    const lower = lowerProfile.extrude(CSG_EPSILON)
-      .translate([0, 0, floorZ + h0 - CSG_EPSILON / 2]);
-    const upper = upperProfile.extrude(CSG_EPSILON)
-      .translate([0, 0, floorZ + h1 - CSG_EPSILON / 2]);
-    segments.push(wasm.Manifold.hull([lower, upper]));
+    for (const lowerComponent of lowerProfile.decompose()) {
+      for (const upperComponent of upperProfile.decompose()) {
+        if (lowerComponent.intersect(upperComponent).isEmpty()) continue;
+        const lower = lowerComponent.extrude(CSG_EPSILON)
+          .translate([0, 0, floorZ + h0 - CSG_EPSILON / 2]);
+        const upper = upperComponent.extrude(CSG_EPSILON)
+          .translate([0, 0, floorZ + h1 - CSG_EPSILON / 2]);
+        const envelope = lowerComponent.add(upperComponent)
+          .extrude(h1 - h0 + 2 * CSG_EPSILON)
+          .translate([0, 0, floorZ + h0 - CSG_EPSILON]);
+        segments.push(wasm.Manifold.hull([lower, upper]).intersect(envelope));
+      }
+    }
   }
   if (!segments.length) return null;
   const clip = clipCS.extrude(radius + CSG_EPSILON)

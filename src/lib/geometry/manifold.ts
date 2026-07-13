@@ -66,7 +66,11 @@ export function repairMesh(mesh: BinMesh): BinMesh {
       // Repair against the same precision callers receive. A triangle that is
       // valid in WASM's float64 mesh can collapse only after Float32Array
       // conversion, which is too late for repairDegenerateTris to see it.
-      out.push(Math.fround(x), Math.fround(y), Math.fround(z));
+      out.push(
+        Math.fround(Math.round(x * OUT_WELD) / OUT_WELD),
+        Math.fround(Math.round(y * OUT_WELD) / OUT_WELD),
+        Math.fround(Math.round(z * OUT_WELD) / OUT_WELD),
+      );
     }
     remap[v] = id;
   }
