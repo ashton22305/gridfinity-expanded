@@ -239,7 +239,7 @@ const cases: { name: string; config: LegacyConfig }[] = [
   { name: '3x3 cavityR6',        config: { ...base, cells: rect(3, 3), cavityCornerRadius: 6 } },
   { name: '2x2 fillet0',         config: { ...base, cells: rect(2, 2), innerFilletRadius: 0 } },
   { name: '2x2 fillet3',         config: { ...base, cells: rect(2, 2), innerFilletRadius: 3 } },
-  { name: 'L-shape fillet2',     config: { ...base, cells: L, innerFilletRadius: 2 } },
+  { name: 'L-shape fillet3',     config: { ...base, cells: L, innerFilletRadius: 3 } },
   { name: 'L open fillet6',      config: { ...base, cells: L, innerFilletRadius: 6, openEdges: [v(1, 1)] } },
   { name: '1x1 h1 fillet3',      config: { ...base, cells: rect(1, 1), heightUnits: 1, innerFilletRadius: 3 } },
   { name: 'thickwall fillet3',   config: { ...base, cells: rect(1, 1), wallThickness: 4, innerFilletRadius: 3 } },
@@ -299,7 +299,7 @@ const U: GridCell[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 0, y
 const splitCases: { name: string; config: LegacyConfig }[] = [
   { name: '6x1 split in 2',      config: { ...base, cells: rect(6, 1), splitLines: [{ axis: 'x', index: 3 }] } },
   { name: '4x2 divider on seam', config: { ...base, cells: rect(4, 2), splitLines: [{ axis: 'x', index: 2 }], dividerEdges: [v(2, 0), v(2, 1)] } },
-  { name: 'L split (empty box)', config: { ...base, cells: L, splitLines: [{ axis: 'x', index: 1 }, { axis: 'y', index: 1 }] } },
+  { name: 'L split fillet3',     config: { ...base, cells: L, innerFilletRadius: 3, splitLines: [{ axis: 'x', index: 1 }, { axis: 'y', index: 1 }] } },
   { name: 'U split (disjoint)',  config: { ...base, cells: U, splitLines: [{ axis: 'y', index: 1 }] } },
   { name: 'wall across seam',    config: { ...base, cells: rect(4, 1), splitLines: [{ axis: 'x', index: 2 }], innerWalls: [{ x1: 10, y1: 21, x2: 158, y2: 21, width: 1.6, height: 8 }] } },
   { name: 'slope across seam',   config: { ...base, cells: rect(6, 1), baseSlopes: [{ bin: 0, angle: 8, dir: '-x' }], splitLines: [{ axis: 'x', index: 3 }] } },
@@ -364,7 +364,15 @@ const splitCases: { name: string; config: LegacyConfig }[] = [
     {
       name: 'non-convex fillet envelope',
       config: { ...base, cells: L, innerFilletRadius: 3 },
-      probes: [{ point: [63, 62.37, 8.47], solid: false }],
+      probes: [
+        { point: [63, 62.37, 8.47], solid: false },
+        // Re-entrant vertical wall at x=40.8. At these heights the theoretical
+        // 3 mm quarter-circle reaches x≈38.42 and x≈38.63 respectively.
+        { point: [38.37, 50, 8.33], solid: false },
+        { point: [38.47, 50, 8.33], solid: true },
+        { point: [38.58, 50, 8.40], solid: false },
+        { point: [38.68, 50, 8.40], solid: true },
+      ],
     },
     {
       name: 'crossing wall fillets',
@@ -376,6 +384,12 @@ const splitCases: { name: string; config: LegacyConfig }[] = [
         { point: [42, 21.37, 8.47], solid: true },
         { point: [30, 23.37, 8.47], solid: true },
         { point: [30, 23.37, 11.47], solid: false },
+        // Horizontal wall face is y=21.8; verify the same 3 mm profile at
+        // floorZ+0.13 and floorZ+0.20 rather than a terraced envelope.
+        { point: [30, 23.87, 8.33], solid: true },
+        { point: [30, 23.97, 8.33], solid: false },
+        { point: [30, 23.67, 8.40], solid: true },
+        { point: [30, 23.77, 8.40], solid: false },
       ],
     },
     {
@@ -392,7 +406,7 @@ const splitCases: { name: string; config: LegacyConfig }[] = [
       const mesh = generateBinManifold(wasm, migrateFixture(config));
       const failed = probes.filter(({ point, solid }) => containsPoint(mesh, point) !== solid);
       if (failed.length) anyBad = true;
-      console.log(`${name.padEnd(28)} semantic=${failed.length ? 'FAIL' : 'pass'}`);
+      console.log(`${name.padEnd(28)} semantic=${failed.length ? `FAIL ${JSON.stringify(failed)}` : 'pass'}`);
     } catch (err) {
       anyBad = true;
       console.log(`${name.padEnd(28)} ERROR: ${String(err)}`);
