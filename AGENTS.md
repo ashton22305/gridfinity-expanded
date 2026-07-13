@@ -12,7 +12,7 @@ Keep changes narrowly scoped, preserve unrelated working-tree changes, and inspe
 
 `src/main.tsx` mounts the app, `src/App.tsx` defines the Mantine AppShell, `src/store.ts` owns Zustand state, and `src/theme.ts` centralizes Mantine defaults. Domain logic is in `src/lib/`: shared contracts in `types.ts`, edge helpers in `edges.ts`, split logic in `split.ts`, printer fit in `printers.ts`, geometry in `geometry/`, and STL serialization in `export/stl.ts`.
 
-Geometry runs in `src/workers/geometry.worker.ts`, driven by `src/hooks/useBinGeometry.ts`. UI components live under `src/components/`; the left panel contains the Shape, Walls, and Split spatial editors, the right panel contains Printer, Dimensions, and Features settings, and `BabylonViewer.tsx` presents generated STL buffers. Validation scripts are in `scripts/`; Vitest files live beside source as `*.test.ts`; browser tests live in `e2e/`.
+Geometry runs in `src/workers/geometry.worker.ts`, driven by `src/hooks/useBinGeometry.ts`. UI components live under `src/components/`; the left panel contains the Shape, Walls, and Split spatial editors, the right panel contains Printer, Dimensions, and Features settings, and `BabylonViewer.tsx` presents generated STL buffers. Validation scripts are in `scripts/`; Vitest files live beside source as `*.test.ts`; browser tests live in `e2e/`. Developer documentation for the geometry pipeline and Babylon viewer lives in `docs/`; see `docs/README.md`.
 
 ## Implementation Rules
 
@@ -27,6 +27,8 @@ The manifold path (`generateBinPieces()` / `generateBinManifold()`) is the produ
 The editors map SVG y downward to mm +y, so generated output is mirrored across Y at the geometry boundary. Do not compensate for orientation in the viewer. Split seam edges are open unless a divider lies on the seam. Combine solids with manifold booleans, use `CrossSection.offset` for inward 2D offsets, feed manifold individually closed primitives, and use a small overlap such as `CSG_EPSILON` where non-identical flush coordinates could create membranes.
 
 The outer wall follows the Gridfinity profile (41.5 mm top width, 3.75 mm outer radius); `cavityCornerRadius` affects only the cavity. Separate `LogicalBin` entries create separate complete bins. `openEdges` remove perimeter walls, `dividerEdges` add grid-aligned internal walls, and `innerWalls` are free-form mm segments. A missing slope is flat and zero-angle slopes should not be persisted.
+
+When changing the geometry pipeline (`src/lib/geometry/`, `src/workers/geometry.worker.ts`, `src/hooks/useBinGeometry.ts`, `src/lib/split.ts`, `src/lib/edges.ts`) or the Babylon viewer (`src/components/viewer/BabylonViewer.tsx`), update the matching document in `docs/` in the same change.
 
 ## Validation and Completion
 
@@ -62,7 +64,7 @@ When a changed path is not safely recognized, classify it conservatively. Keep d
 
 Create a dedicated feature branch in a new Git worktree based on the latest `origin/main`, and make changes in that worktree rather than directly on `main`. Open pull requests with `main` as the target branch.
 
-Use short, imperative commit subjects. Pull requests should describe user-visible changes, list validation commands, link related issues, and include screenshots or recordings for UI changes. For geometry or export changes, call out printability and manifold implications.
+Use short, imperative commit subjects. Pull requests should describe user-visible changes, list validation commands, link related issues, and include screenshots or recordings for UI changes. For geometry or export changes, call out printability and manifold implications. Pull requests that touch the geometry pipeline or Babylon viewer must include any corresponding `docs/` updates.
 
 Use `--body-file` for multiline `gh` pull-request bodies and comments. Do not embed escaped `\\n` sequences in shell arguments because GitHub renders them as literal text.
 
