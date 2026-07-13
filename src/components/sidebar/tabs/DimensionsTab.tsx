@@ -65,7 +65,7 @@ export function DimensionsTab() {
         onChange={(v) => updateConfig({ innerFilletRadius: v })}
         display={config.innerFilletRadius.toFixed(2)}
         unit="mm"
-        hint="Rounds the inside floor-to-wall edge for easier cleaning"
+        hint="Rounds floor-to-wall edges and supplies the minimum radius where walls meet"
       />
 
       {bins.map(({ id }) => {
