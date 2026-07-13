@@ -67,10 +67,10 @@ export function useBinGeometry(config: BinConfig): GeometryState {
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    setState((s) => ({ ...s, generating: true, error: null }));
 
     debounceRef.current = setTimeout(() => {
       const requestId = ++requestIdRef.current;
-      setState((s) => ({ ...s, generating: true, error: null }));
       workerRef.current?.postMessage({ config, requestId });
     }, DEBOUNCE_MS);
 
