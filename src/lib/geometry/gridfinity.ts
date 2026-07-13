@@ -33,9 +33,45 @@ const OUTER_R = PEG_R_TOP;
 export const FLOOR_THICKNESS = 1.2;
 
 // Floor fillet: concave quarter-circle at the cavity floor-to-wall junction.
-// A geodesic sphere sweeps an inset 2D cavity profile to form the continuous
-// round. This avoids the visible horizontal terraces produced by stacked slabs.
+// Adjacent offset profiles are lofted into connected facets so every wall uses
+// the same continuous round without the horizontal terraces of stacked slabs.
 const FILLET_SEGMENTS = 32;
+
+/** Build a continuous quarter-circle floor fillet from caller-supplied profiles. */
+function buildFloorFillet(
+  wasm: ManifoldToplevel, radius: number, floorZ: number,
+  profileAt: (distance: number) => CrossSection, clipCS: CrossSection,
+): Manifold | null {
+  if (radius <= 0) return null;
+  const steps = Math.min(48, Math.max(8, Math.ceil(radius * 8)));
+  const segments: Manifold[] = [];
+  for (let step = 0; step < steps; step++) {
+    const h0 = radius * step / steps;
+    const h1 = radius * (step + 1) / steps;
+    const distanceAt = (height: number) =>
+      radius - Math.sqrt(Math.max(0, 2 * radius * height - height * height));
+    const lowerProfile = profileAt(distanceAt(h0));
+    const upperProfile = profileAt(distanceAt(h1));
+    if (lowerProfile.isEmpty() || upperProfile.isEmpty()) continue;
+    for (const lowerComponent of lowerProfile.decompose()) {
+      for (const upperComponent of upperProfile.decompose()) {
+        if (lowerComponent.intersect(upperComponent).isEmpty()) continue;
+        const lower = lowerComponent.extrude(CSG_EPSILON)
+          .translate([0, 0, floorZ + h0 - CSG_EPSILON / 2]);
+        const upper = upperComponent.extrude(CSG_EPSILON)
+          .translate([0, 0, floorZ + h1 - CSG_EPSILON / 2]);
+        const envelope = lowerComponent.add(upperComponent)
+          .extrude(h1 - h0 + 2 * CSG_EPSILON)
+          .translate([0, 0, floorZ + h0 - CSG_EPSILON]);
+        segments.push(wasm.Manifold.hull([lower, upper]).intersect(envelope));
+      }
+    }
+  }
+  if (!segments.length) return null;
+  const clip = clipCS.extrude(radius + CSG_EPSILON)
+    .translate([0, 0, floorZ - CSG_EPSILON / 2]);
+  return wasm.Manifold.union(segments).intersect(clip);
+}
 
 /** Clamp the configured fillet radius so it never exceeds the cavity depth. */
 function clampFilletR(requested: number, totalHeight: number): number {
@@ -53,9 +89,10 @@ const CSG_EPSILON = 0.01;      // overlap to prevent coplanar faces in boolean o
 const PREVIEW_INSET = 0.15;    // per side; adjacent split pieces show a 0.3 mm gap
 
 
-// Free-form inner walls: embedded into the floor for a solid union, with a
-// concave quarter-round ramp (radius TRANSITION_R, clamped to the available
-// headroom) wherever a lower wall meets taller structure.
+// Free-form inner walls: embedded into the floor for a solid union, with the
+// configured cavity fillet at their base and a concave quarter-round ramp
+// (radius TRANSITION_R, clamped to the available headroom) wherever a lower
+// wall meets taller structure.
 const WALL_EMBED   = 0.5;
 const TRANSITION_R = 4;
 
@@ -343,7 +380,7 @@ function clampOpeningRadius(ext: CrossSection, rc: number): number {
 
 /**
  * Cavity solid (or null when the plan leaves no cavity, e.g. a wall thicker
- * than the cell): a spherical sweep forms the continuous concave floor fillet
+ * than the cell): a connected profile loft forms the continuous concave floor fillet
  * (floorZ → floorZ+filletR), capped by the straight column, which pokes
  * CSG_EPSILON past the rim so the top cut opens cleanly.
  *
@@ -352,8 +389,8 @@ function clampOpeningRadius(ext: CrossSection, rc: number): number {
  * to the real cavity: otherwise they would retreat from open/seam faces too,
  * growing ribs and floor bumps right where split pieces are glued together.
  * The final intersection preserves the "never breach a wall" invariant. The
- * sweep is a native 3D Minkowski sum, so its quarter-circle profile is made of
- * connected sloped facets instead of disconnected horizontal stair steps.
+ * loft uses the same quarter-circle builder as free-form inner walls, so all
+ * floor-to-wall junctions have matching connected facets.
  */
 function buildCavityManifold(
   wasm: ManifoldToplevel, plan: CavityPlan, rc: number, filletR: number, totalHeight: number,
@@ -385,18 +422,14 @@ function buildCavityManifold(
   const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
   const solids: Manifold[] = [];
   if (filletR > 0) {
-    const inset = opened.offset(-filletR, 'Miter', 2);
-    if (!inset.isEmpty()) {
-      // Put a seed face exactly on the fillet-to-column junction. Centering the
-      // thin seed across that plane makes the tessellated sphere interpolate
-      // between two equators, leaving a hairline recessed shelf at the join.
-      const sweepSeed = inset.extrude(CSG_EPSILON)
-        .translate([0, 0, floorZ + filletR]);
-      const swept = sweepSeed.minkowskiSum(wasm.Manifold.sphere(filletR, FILLET_SEGMENTS));
-      const cavityClip = cavityCS.extrude(filletR + CSG_EPSILON)
-        .translate([0, 0, floorZ]);
-      solids.push(swept.intersect(cavityClip));
-    }
+    const fillet = buildFloorFillet(
+      wasm, filletR, floorZ,
+      (distance) => distance > 0.001
+        ? opened.offset(-distance, 'Miter', 2).intersect(cavityCS)
+        : cavityCS,
+      cavityCS,
+    );
+    if (fillet) solids.push(fillet);
   }
   solids.push(cavityCS
     .extrude(totalHeight - floorZ - filletR + CSG_EPSILON)
@@ -409,7 +442,10 @@ function buildCavityManifold(
  * profile, so an end that reaches a wall overlaps into it and fuses cleanly;
  * at open faces the wall ends flush with the cut plane).
  *
- * Where a wall is lower than the rim, a stack of slabs above its top traces a
+ * Connected loft segments around each wall footprint add the configured cavity
+ * fillet at the floor junction. The round is clipped to the cavity so it cannot
+ * cross an outer wall or protrude through an open face. Where a wall is lower
+ * than the rim, a stack of slabs above its top traces a
  * concave quarter-round ramp into everything taller that it touches: the
  * "material" region (outer walls + grid dividers = clip − cavity, plus any
  * taller inner wall's footprint) is dilated by the arc inset at each slab
@@ -419,16 +455,17 @@ function buildCavityManifold(
  */
 function buildInnerWallsManifold(
   wasm: ManifoldToplevel, walls: InnerWall[], clipCS: CrossSection, cavityCS: CrossSection,
-  totalHeight: number,
+  totalHeight: number, filletR: number,
 ): Manifold[] {
   const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
-  const planned: { footprint: CrossSection; top: number }[] = [];
+  const planned: { rawFootprint: CrossSection; footprint: CrossSection; top: number }[] = [];
   for (const w of walls) {
     const quad = innerWallQuad(w);
     if (!quad) continue;
-    const footprint = new wasm.CrossSection([quad]).intersect(clipCS);
+    const rawFootprint = new wasm.CrossSection([quad]);
+    const footprint = rawFootprint.intersect(clipCS);
     if (footprint.isEmpty()) continue;
-    planned.push({ footprint, top: innerWallTop(w, floorZ, totalHeight) });
+    planned.push({ rawFootprint, footprint, top: innerWallTop(w, floorZ, totalHeight) });
   }
 
   const solids: Manifold[] = [];
@@ -436,6 +473,18 @@ function buildInnerWallsManifold(
   planned.forEach((w, i) => {
     const bottom = floorZ - WALL_EMBED;
     solids.push(w.footprint.extrude(w.top - bottom).translate([0, 0, bottom]));
+
+    const baseFilletR = Math.min(filletR, w.top - floorZ);
+    if (baseFilletR > 0) {
+      const fillet = buildFloorFillet(
+        wasm, baseFilletR, floorZ,
+        (distance) => distance > 0.001
+          ? w.rawFootprint.offset(distance, 'Round', 2, FILLET_SEGMENTS)
+          : w.rawFootprint,
+        cavityCS,
+      );
+      if (fillet) solids.push(fillet);
+    }
 
     const headroom = totalHeight - w.top;
     if (headroom < 0.05) return;  // full height (or as good as): nothing to blend into
@@ -545,7 +594,7 @@ function generatePieceManifold(
     // sloped-base wedge. All overlap into existing material (floor embed, wall
     // band clip), so the unions fuse through real volume.
     const additions: Manifold[] = buildInnerWallsManifold(
-      wasm, config.innerWalls ?? [], outerCS, cavity.cs, totalHeight);
+      wasm, config.innerWalls ?? [], outerCS, cavity.cs, totalHeight, filletR);
     const wedge = buildSlopedBaseManifold(slope, binCells, outerCS, cavity.cs, totalHeight);
     if (wedge) additions.push(wedge);
     if (additions.length) bin = Manifold.union([bin, ...additions]);

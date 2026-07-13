@@ -158,6 +158,27 @@ function stlBoundary(buf: ArrayBuffer): { boundary: number; nonManifold: number 
   return { boundary, nonManifold };
 }
 
+/** Solid-angle containment test used by semantic probes away from boundaries. */
+function containsPoint(mesh: BinMesh, [px, py, pz]: [number, number, number]): boolean {
+  const { vertProperties: vp, triVerts: tv } = mesh;
+  let angle = 0;
+  for (let i = 0; i < tv.length; i += 3) {
+    const a = tv[i] * 3, b = tv[i + 1] * 3, c = tv[i + 2] * 3;
+    const ax = vp[a] - px, ay = vp[a + 1] - py, az = vp[a + 2] - pz;
+    const bx = vp[b] - px, by = vp[b + 1] - py, bz = vp[b + 2] - pz;
+    const cx = vp[c] - px, cy = vp[c + 1] - py, cz = vp[c + 2] - pz;
+    const la = Math.hypot(ax, ay, az), lb = Math.hypot(bx, by, bz), lc = Math.hypot(cx, cy, cz);
+    const numerator = ax * (by * cz - bz * cy)
+      - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+    const denominator = la * lb * lc
+      + (ax * bx + ay * by + az * bz) * lc
+      + (bx * cx + by * cy + bz * cz) * la
+      + (cx * ax + cy * ay + cz * az) * lb;
+    angle += 2 * Math.atan2(numerator, denominator);
+  }
+  return Math.abs(angle) > 2 * Math.PI;
+}
+
 const rect = (w: number, h: number): GridCell[] => {
   const c: GridCell[] = [];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) c.push({ x, y });
@@ -236,6 +257,7 @@ const cases: { name: string; config: LegacyConfig }[] = [
   { name: '3x3 rc20 + dividers', config: { ...base, cells: rect(3, 3), cavityCornerRadius: 20, dividerEdges: [v(1, 0), v(1, 1), v(1, 2)] } },
   { name: 'rc20 fillet10 thick', config: { ...base, cells: rect(2, 2), cavityCornerRadius: 20, innerFilletRadius: 10, wallThickness: 4 } },
   // Free-form inner walls
+  { name: 'wall sharp base',     config: { ...base, cells: rect(2, 2), innerFilletRadius: 0, innerWalls: [{ x1: 6, y1: 42, x2: 78, y2: 42, width: 1.6, height: null }] } },
   { name: 'diag wall full',      config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 6, y1: 6, x2: 78, y2: 78, width: 1.6, height: null }] } },
   { name: 'low wall ramps',      config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 0, y1: 40, x2: 84, y2: 44, width: 2, height: 8 }] } },
   { name: 'low wall to open',    config: { ...base, cells: rect(1, 1), openEdges: [v(1, 0)], innerWalls: [{ x1: 0, y1: 21, x2: 42, y2: 21, width: 1.2, height: 6 }] } },
@@ -243,6 +265,10 @@ const cases: { name: string; config: LegacyConfig }[] = [
   { name: 'crossing wall hts',   config: { ...base, cells: rect(2, 2), innerWalls: [
       { x1: 0, y1: 21, x2: 84, y2: 21, width: 1.6, height: 6 },
       { x1: 43, y1: 0, x2: 41, y2: 84, width: 2, height: 14 },
+    ] } },
+  { name: 'crossing wall fillet', config: { ...base, cells: rect(2, 2), innerFilletRadius: 3, innerWalls: [
+      { x1: 6, y1: 42, x2: 78, y2: 42, width: 1.6, height: null },
+      { x1: 42, y1: 6, x2: 42, y2: 78, width: 1.6, height: null },
     ] } },
   { name: 'wall rc20 fillet6',   config: { ...base, cells: rect(2, 2), cavityCornerRadius: 20, innerFilletRadius: 6, innerWalls: [{ x1: 0, y1: 30, x2: 84, y2: 60, width: 1.6, height: 8 }] } },
   { name: 'wall in wall band',   config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 0, y1: 0.5, x2: 84, y2: 0.5, width: 1, height: null }] } },
@@ -314,6 +340,59 @@ const splitCases: { name: string; config: LegacyConfig }[] = [
       for (const piece of pieces) {
         check(`${name} [${piece.name.replace('gridfinity-bin-', '').replace('.stl', '')}]`, piece.mesh);
       }
+    } catch (err) {
+      anyBad = true;
+      console.log(`${name.padEnd(28)} ERROR: ${String(err)}`);
+    }
+  }
+
+  const semanticCases: { name: string; config: LegacyConfig; probes: { point: [number, number, number]; solid: boolean }[] }[] = [
+    {
+      name: 'divider fillet envelope',
+      config: { ...base, cells: rect(2, 1), innerFilletRadius: 3, dividerEdges: [v(1, 0)] },
+      probes: [
+        { point: [42, 20.37, 8.47], solid: true },
+        { point: [40, 20.37, 8.47], solid: true },
+        { point: [40, 20.37, 11.47], solid: false },
+      ],
+    },
+    {
+      name: 'disjoint fillet envelope',
+      config: { ...base, cells: disjoint, innerFilletRadius: 3 },
+      probes: [{ point: [63, 20.37, 8.47], solid: false }],
+    },
+    {
+      name: 'non-convex fillet envelope',
+      config: { ...base, cells: L, innerFilletRadius: 3 },
+      probes: [{ point: [63, 62.37, 8.47], solid: false }],
+    },
+    {
+      name: 'crossing wall fillets',
+      config: { ...base, cells: rect(2, 2), innerFilletRadius: 3, innerWalls: [
+        { x1: 5, y1: 21, x2: 79, y2: 21, width: 1.6, height: 12 },
+        { x1: 42, y1: 5, x2: 42, y2: 79, width: 1.6, height: 12 },
+      ] },
+      probes: [
+        { point: [42, 21.37, 8.47], solid: true },
+        { point: [30, 23.37, 8.47], solid: true },
+        { point: [30, 23.37, 11.47], solid: false },
+      ],
+    },
+    {
+      name: 'sharp wall base',
+      config: { ...base, cells: rect(2, 1), innerFilletRadius: 0, innerWalls: [
+        { x1: 5, y1: 21, x2: 79, y2: 21, width: 1.6, height: 12 },
+      ] },
+      probes: [{ point: [30, 23.37, 8.47], solid: false }],
+    },
+  ];
+
+  for (const { name, config, probes } of semanticCases) {
+    try {
+      const mesh = generateBinManifold(wasm, migrateFixture(config));
+      const failed = probes.filter(({ point, solid }) => containsPoint(mesh, point) !== solid);
+      if (failed.length) anyBad = true;
+      console.log(`${name.padEnd(28)} semantic=${failed.length ? 'FAIL' : 'pass'}`);
     } catch (err) {
       anyBad = true;
       console.log(`${name.padEnd(28)} ERROR: ${String(err)}`);
