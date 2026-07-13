@@ -1,6 +1,10 @@
-# React + TypeScript + Vite
+# Gridfinity Expanded
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A React 19 + Vite 6 TypeScript application that generates printable Gridfinity STL files. Shape, wall, and split editors on the left configure one or more bins; the right panel covers printer, dimension, and feature settings; the center panel previews the generated geometry in 3D.
+
+Developer documentation for the geometry generation pipeline and the Babylon.js viewer lives in [`docs/`](./docs/README.md).
+
+This project was scaffolded from the Vite React + TypeScript template, which provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
 Currently, two official plugins are available:
 
