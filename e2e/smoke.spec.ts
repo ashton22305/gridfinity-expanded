@@ -19,6 +19,10 @@ test('edits, regenerates, previews, and exports a printable bin', async ({ page 
   const settings = page.getByRole('complementary');
   await expect(settings.getByRole('combobox', { name: 'Printer' })).toBeVisible();
   await expect(settings.getByText('Dimensions', { exact: true })).toBeVisible();
+  await expect(settings.getByText(
+    'Rounds floor-to-wall edges and supplies the minimum radius where walls meet',
+    { exact: true },
+  )).toBeVisible();
   await expect(settings.getByRole('switch', { name: /Magnet holes/ })).toBeVisible();
 
   const exportButton = page.getByRole('button', { name: /^Export STL/ });

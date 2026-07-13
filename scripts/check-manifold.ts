@@ -251,6 +251,8 @@ const cases: { name: string; config: LegacyConfig }[] = [
   { name: '1x1 all open rc20',   config: { ...base, cells: rect(1, 1), cavityCornerRadius: 20, openEdges: [h(0, 0), h(0, 1), v(0, 0), v(1, 0)] } },
   { name: 'L concave edge open', config: { ...base, cells: L, openEdges: [v(1, 1)] } },
   { name: '2x2 divider cross',   config: { ...base, cells: rect(2, 2), dividerEdges: [v(1, 0), v(1, 1), h(0, 1), h(1, 1)] } },
+  { name: 'divider cross fillet', config: { ...base, cells: rect(2, 2), cavityCornerRadius: 0, innerFilletRadius: 3, dividerEdges: [v(1, 0), v(1, 1), h(0, 1), h(1, 1)] } },
+  { name: 'divider T fillet',    config: { ...base, cells: rect(2, 2), cavityCornerRadius: 0, innerFilletRadius: 3, dividerEdges: [v(1, 0), v(1, 1), h(1, 1)] } },
   { name: '2x1 divider + open',  config: { ...base, cells: rect(2, 1), dividerEdges: [v(1, 0)], openEdges: [h(0, 0), h(1, 0)] } },
   // Cavity corner radius clamping / interactions
   { name: '1x1 rc20 (clamp)',    config: { ...base, cells: rect(1, 1), cavityCornerRadius: 20 } },
@@ -269,6 +271,25 @@ const cases: { name: string; config: LegacyConfig }[] = [
   { name: 'crossing wall fillet', config: { ...base, cells: rect(2, 2), innerFilletRadius: 3, innerWalls: [
       { x1: 6, y1: 42, x2: 78, y2: 42, width: 1.6, height: null },
       { x1: 42, y1: 6, x2: 42, y2: 78, width: 1.6, height: null },
+    ] } },
+  { name: 'T wall fillet',       config: { ...base, cells: rect(2, 2), innerFilletRadius: 3, innerWalls: [
+      { x1: 6, y1: 42, x2: 78, y2: 42, width: 1.6, height: null },
+      { x1: 42, y1: 6, x2: 42, y2: 42, width: 1.6, height: null },
+    ] } },
+  { name: 'wall meets perimeter', config: { ...base, cells: rect(2, 1), innerFilletRadius: 3, innerWalls: [
+      { x1: 0, y1: 21, x2: 70, y2: 21, width: 1.6, height: null },
+    ] } },
+  { name: 'unequal wall junction', config: { ...base, cells: rect(2, 2), innerFilletRadius: 6, innerWalls: [
+      { x1: 6, y1: 42, x2: 78, y2: 42, width: 1.6, height: 3 },
+      { x1: 42, y1: 6, x2: 42, y2: 78, width: 1.6, height: 12 },
+    ] } },
+  { name: 'nearby separate walls', config: { ...base, cells: rect(2, 1), innerFilletRadius: 3, innerWalls: [
+      { x1: 6, y1: 19, x2: 78, y2: 19, width: 1.6, height: null },
+      { x1: 6, y1: 23, x2: 78, y2: 23, width: 1.6, height: null },
+    ] } },
+  { name: 'junction at open edge', config: { ...base, cells: rect(2, 1), innerFilletRadius: 3, openEdges: [v(2, 0)], innerWalls: [
+      { x1: 20, y1: 21, x2: 84, y2: 21, width: 1.6, height: null },
+      { x1: 60, y1: 5, x2: 60, y2: 37, width: 1.6, height: null },
     ] } },
   { name: 'wall rc20 fillet6',   config: { ...base, cells: rect(2, 2), cavityCornerRadius: 20, innerFilletRadius: 6, innerWalls: [{ x1: 0, y1: 30, x2: 84, y2: 60, width: 1.6, height: 8 }] } },
   { name: 'wall in wall band',   config: { ...base, cells: rect(2, 2), innerWalls: [{ x1: 0, y1: 0.5, x2: 84, y2: 0.5, width: 1, height: null }] } },
@@ -302,6 +323,10 @@ const splitCases: { name: string; config: LegacyConfig }[] = [
   { name: 'L split (empty box)', config: { ...base, cells: L, splitLines: [{ axis: 'x', index: 1 }, { axis: 'y', index: 1 }] } },
   { name: 'U split (disjoint)',  config: { ...base, cells: U, splitLines: [{ axis: 'y', index: 1 }] } },
   { name: 'wall across seam',    config: { ...base, cells: rect(4, 1), splitLines: [{ axis: 'x', index: 2 }], innerWalls: [{ x1: 10, y1: 21, x2: 158, y2: 21, width: 1.6, height: 8 }] } },
+  { name: 'wall junction on seam', config: { ...base, cells: rect(4, 2), innerFilletRadius: 3, splitLines: [{ axis: 'x', index: 2 }], innerWalls: [
+      { x1: 10, y1: 42, x2: 158, y2: 42, width: 1.6, height: 10 },
+      { x1: 84, y1: 5, x2: 84, y2: 79, width: 1.6, height: 10 },
+    ] } },
   { name: 'slope across seam',   config: { ...base, cells: rect(6, 1), baseSlopes: [{ bin: 0, angle: 8, dir: '-x' }], splitLines: [{ axis: 'x', index: 3 }] } },
   { name: '2 bins + split',      config: { ...base, cells: [
       { x: 0, y: 0, bin: 0 }, { x: 1, y: 0, bin: 0 }, { x: 2, y: 0, bin: 1 }, { x: 3, y: 0, bin: 1 },
@@ -348,6 +373,22 @@ const splitCases: { name: string; config: LegacyConfig }[] = [
 
   const semanticCases: { name: string; config: LegacyConfig; probes: { point: [number, number, number]; solid: boolean }[] }[] = [
     {
+      name: 'fillet minimum corner',
+      config: { ...base, cells: rect(1, 1), cavityCornerRadius: 0, innerFilletRadius: 3 },
+      probes: [
+        { point: [2, 2, 12], solid: true },
+        { point: [3, 3, 12], solid: false },
+      ],
+    },
+    {
+      name: 'divider cross junction',
+      config: { ...base, cells: rect(2, 2), cavityCornerRadius: 0, innerFilletRadius: 3, dividerEdges: [v(1, 0), v(1, 1), h(0, 1), h(1, 1)] },
+      probes: [
+        { point: [41, 41, 12], solid: true },
+        { point: [40, 40, 12], solid: false },
+      ],
+    },
+    {
       name: 'divider fillet envelope',
       config: { ...base, cells: rect(2, 1), innerFilletRadius: 3, dividerEdges: [v(1, 0)] },
       probes: [
@@ -376,7 +417,48 @@ const splitCases: { name: string; config: LegacyConfig }[] = [
         { point: [42, 21.37, 8.47], solid: true },
         { point: [30, 23.37, 8.47], solid: true },
         { point: [30, 23.37, 11.47], solid: false },
+        { point: [41, 20, 12], solid: true },
       ],
+    },
+    {
+      name: 'T wall junction',
+      config: { ...base, cells: rect(2, 2), innerFilletRadius: 3, innerWalls: [
+        { x1: 6, y1: 42, x2: 78, y2: 42, width: 1.6, height: 12 },
+        { x1: 42, y1: 6, x2: 42, y2: 42, width: 1.6, height: 12 },
+      ] },
+      probes: [
+        { point: [41, 41, 12], solid: true },
+        { point: [39, 39, 12], solid: false },
+      ],
+    },
+    {
+      name: 'wall perimeter junction',
+      config: { ...base, cells: rect(2, 1), innerFilletRadius: 3, innerWalls: [
+        { x1: 0, y1: 21, x2: 70, y2: 21, width: 1.6, height: 12 },
+      ] },
+      probes: [
+        { point: [1.8, 19.8, 12], solid: true },
+        { point: [4, 17, 12], solid: false },
+      ],
+    },
+    {
+      name: 'unequal junction cap',
+      config: { ...base, cells: rect(2, 2), innerFilletRadius: 6, innerWalls: [
+        { x1: 6, y1: 42, x2: 78, y2: 42, width: 1.6, height: 3 },
+        { x1: 42, y1: 6, x2: 42, y2: 78, width: 1.6, height: 12 },
+      ] },
+      probes: [
+        { point: [41, 41, 10], solid: true },
+        { point: [41, 41, 16], solid: false },
+      ],
+    },
+    {
+      name: 'disconnected wall gap',
+      config: { ...base, cells: rect(2, 1), innerFilletRadius: 3, innerWalls: [
+        { x1: 6, y1: 19, x2: 78, y2: 19, width: 1.6, height: 12 },
+        { x1: 6, y1: 23, x2: 78, y2: 23, width: 1.6, height: 12 },
+      ] },
+      probes: [{ point: [42, 21, 12], solid: false }],
     },
     {
       name: 'sharp wall base',

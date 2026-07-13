@@ -236,6 +236,14 @@ interface CavityPlan {
                            // and floor fillet from retreating at open/seam faces
 }
 
+interface PlannedInnerWall {
+  rawFootprint: CrossSection;
+  footprint: CrossSection;
+  transitionFootprint: CrossSection;
+  columnBottom: number;
+  top: number;
+}
+
 /**
  * Wall layout → rectangles. `t = halfTol + wallThickness` is the strip depth
  * measured from the 42 mm pitch line (0.25 mm clearance + the wall itself), so
@@ -458,32 +466,111 @@ function buildInnerWallsManifold(
   totalHeight: number, filletR: number,
 ): Manifold[] {
   const floorZ = BASE_TOTAL_HEIGHT + FLOOR_THICKNESS;
-  const planned: { rawFootprint: CrossSection; footprint: CrossSection; top: number }[] = [];
+  const planned: PlannedInnerWall[] = [];
   for (const w of walls) {
     const quad = innerWallQuad(w);
     if (!quad) continue;
     const rawFootprint = new wasm.CrossSection([quad]);
     const footprint = rawFootprint.intersect(clipCS);
     if (footprint.isEmpty()) continue;
-    planned.push({ rawFootprint, footprint, top: innerWallTop(w, floorZ, totalHeight) });
+    planned.push({
+      rawFootprint,
+      footprint,
+      transitionFootprint: footprint,
+      columnBottom: floorZ - WALL_EMBED,
+      top: innerWallTop(w, floorZ, totalHeight),
+    });
   }
 
   const solids: Manifold[] = [];
   const baseMaterial = clipCS.subtract(cavityCS);
-  planned.forEach((w, i) => {
-    const bottom = floorZ - WALL_EMBED;
-    solids.push(w.footprint.extrude(w.top - bottom).translate([0, 0, bottom]));
+  const bottom = floorZ - WALL_EMBED;
 
-    const baseFilletR = Math.min(filletR, w.top - floorZ);
-    if (baseFilletR > 0) {
+  // Only footprints that actually touch belong to the same junction. Applying
+  // the closing to every wall at once would bridge unrelated walls whenever
+  // their gap is narrower than twice the configured radius.
+  const parent = planned.map((_, i) => i);
+  const root = (i: number): number => {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  };
+  const join = (a: number, b: number) => {
+    a = root(a);
+    b = root(b);
+    if (a !== b) parent[b] = a;
+  };
+  for (let i = 0; i < planned.length; i++) {
+    for (let j = i + 1; j < planned.length; j++) {
+      if (!planned[i].footprint.intersect(planned[j].footprint).isEmpty()) join(i, j);
+    }
+  }
+
+  const components = new Map<number, number[]>();
+  planned.forEach((_, i) => {
+    const component = components.get(root(i)) ?? [];
+    component.push(i);
+    components.set(root(i), component);
+  });
+
+  for (const indices of components.values()) {
+    const rawFootprint = wasm.CrossSection.union(indices.map((i) => planned[i].rawFootprint));
+    const touchesBaseMaterial = !rawFootprint.intersect(baseMaterial).isEmpty();
+    const availableHeight = Math.min(...indices.map((i) => planned[i].top - floorZ));
+    const junctionR = Math.min(filletR, availableHeight);
+    let roundedRaw = rawFootprint;
+    if (junctionR > 0) {
+      // Round morphological closing fills only re-entrant junction quadrants.
+      // Including existing perimeter/divider material makes a free-form wall
+      // meeting either one share the same toroidal blend. Restricting the
+      // result to this component's radius envelope keeps disconnected walls
+      // independent even when they touch the same perimeter component.
+      const material = baseMaterial.add(rawFootprint);
+      const closed = material
+        .offset(junctionR, 'Round', 2, FILLET_SEGMENTS)
+        .offset(-junctionR, 'Round', 2, FILLET_SEGMENTS)
+        .simplify(1e-3);
+      const envelope = rawFootprint.offset(junctionR + CSG_EPSILON, 'Round', 2, FILLET_SEGMENTS);
+      roundedRaw = closed.intersect(envelope).add(rawFootprint).simplify(1e-3);
+    }
+
+    const roundedFootprint = roundedRaw.intersect(clipCS);
+    if (roundedFootprint.isEmpty()) continue;
+    const sharedTop = Math.min(...indices.map((i) => planned[i].top));
+    solids.push(roundedFootprint.extrude(sharedTop - bottom).translate([0, 0, bottom]));
+    for (const i of indices) planned[i].columnBottom = sharedTop;
+
+    if (junctionR > 0) {
+      // The cavity subtraction already owns perimeter/divider floor rounds.
+      // At those contacts, retain the free wall's source profile so its round
+      // overlaps the existing one instead of reproducing a coplanar arc. Fully
+      // interior junctions use the shared rounded footprint end-to-end.
+      const filletFootprint = touchesBaseMaterial ? rawFootprint : roundedRaw;
       const fillet = buildFloorFillet(
-        wasm, baseFilletR, floorZ,
+        wasm, junctionR, floorZ,
         (distance) => distance > 0.001
-          ? w.rawFootprint.offset(distance, 'Round', 2, FILLET_SEGMENTS)
-          : w.rawFootprint,
+          ? filletFootprint.offset(distance, 'Round', 2, FILLET_SEGMENTS)
+          : filletFootprint,
         cavityCS,
       );
       if (fillet) solids.push(fillet);
+
+      for (const i of indices) {
+        if (!touchesBaseMaterial) {
+          planned[i].transitionFootprint = roundedFootprint.intersect(
+            planned[i].rawFootprint.offset(junctionR, 'Round', 2, FILLET_SEGMENTS),
+          );
+        }
+      }
+    }
+  }
+
+  planned.forEach((w, i) => {
+    if (w.top > w.columnBottom + 0.001) {
+      const zBottom = w.columnBottom - CSG_EPSILON;
+      solids.push(w.footprint.extrude(w.top - zBottom).translate([0, 0, zBottom]));
     }
 
     const headroom = totalHeight - w.top;
@@ -503,7 +590,7 @@ function buildInnerWallsManifold(
       // taller face (h=R, d=0): d(h) = R − √(2Rh − h²).
       const d = R - Math.sqrt(Math.max(0, 2 * R * h - h * h));
       if (d <= 0.005) continue;
-      const cs = material.offset(d, 'Round', 2, 16).intersect(w.footprint);
+      const cs = material.offset(d, 'Round', 2, 16).intersect(w.transitionFootprint);
       if (cs.isEmpty()) continue;
       const zBottom = w.top + s * stepH - CSG_EPSILON;
       const zTop = Math.min(w.top + (s + 1) * stepH, totalHeight);
@@ -570,6 +657,7 @@ function generatePieceManifold(
   const totalHeight = totalHeightOf(config);
   const filletR = clampFilletR(config.innerFilletRadius, totalHeight);
   const rc = Math.max(0, config.cavityCornerRadius || 0);
+  const profileR = Math.max(rc, filletR);
 
   // Positive solids: the connector pegs plus the extruded body/wall column.
   const outerCS = pieceProfileCS(wasm, cells, binCells, binOuterCS);
@@ -585,8 +673,8 @@ function generatePieceManifold(
   let bin = Manifold.union(solids);
 
   const wholeWalls = resolveWalls(binCells, binCells, config);
-  const plan = planCavity(cells, binCells, walls, wholeWalls, config.wallThickness, Math.max(rc, filletR) + 1);
-  const cavity = buildCavityManifold(wasm, plan, rc, filletR, totalHeight);
+  const plan = planCavity(cells, binCells, walls, wholeWalls, config.wallThickness, profileR + 1);
+  const cavity = buildCavityManifold(wasm, plan, profileR, filletR, totalHeight);
   if (cavity) {
     bin = bin.subtract(cavity.solid);
 

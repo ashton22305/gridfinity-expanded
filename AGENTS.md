@@ -26,7 +26,7 @@ The manifold path (`generateBinPieces()` / `generateBinManifold()`) is the produ
 
 The editors map SVG y downward to mm +y, so generated output is mirrored across Y at the geometry boundary. Do not compensate for orientation in the viewer. Split seam edges are open unless a divider lies on the seam. Combine solids with manifold booleans, use `CrossSection.offset` for inward 2D offsets, feed manifold individually closed primitives, and use a small overlap such as `CSG_EPSILON` where non-identical flush coordinates could create membranes.
 
-The outer wall follows the Gridfinity profile (41.5 mm top width, 3.75 mm outer radius); `cavityCornerRadius` affects only the cavity. Separate `LogicalBin` entries create separate complete bins. `openEdges` remove perimeter walls, `dividerEdges` add grid-aligned internal walls, and `innerWalls` are free-form mm segments. A missing slope is flat and zero-angle slopes should not be persisted.
+The outer wall follows the Gridfinity profile (41.5 mm top width, 3.75 mm outer radius); `cavityCornerRadius` affects only the cavity. `innerFilletRadius` also supplies the minimum compatible radius at perimeter, divider, and touching free-form wall junctions. Separate `LogicalBin` entries create separate complete bins. `openEdges` remove perimeter walls, `dividerEdges` add grid-aligned internal walls, and `innerWalls` are free-form mm segments. A missing slope is flat and zero-angle slopes should not be persisted.
 
 ## Validation and Completion
 
