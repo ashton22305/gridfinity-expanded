@@ -1,5 +1,5 @@
 /*
- * Styling for the bespoke SVG grid editors (Shape / Walls / Split) — the one
+ * Styling for the bespoke SVG grid editors (Shape / Walls / Cuts) — the one
  * part of the UI a component library can't express. Kept in one file, keyed by
  * class, so the editors carry no inline style config beyond genuinely
  * data-driven values (a cell's bin color, a wall's pixel thickness).
@@ -20,7 +20,6 @@
 :root {
   --wall-color: var(--mantine-color-gray-5);
   --open-color: var(--mantine-color-dark-2);
-  --divider-color: var(--mantine-color-blue-6);
   --custom-wall-color: var(--mantine-color-teal-5);
 }
 
@@ -45,8 +44,7 @@
   transition: stroke 100ms;
 }
 
-/* Outer walls render heavier than dividers so the perimeter reads as the
-   bin's boundary at a glance. */
+/* Outer walls render heavily so the perimeter reads as the bin boundary. */
 .edge-line--wall {
   stroke: var(--wall-color);
   stroke-width: 5;
@@ -62,17 +60,6 @@
 }
 .edge:hover .edge-line--open {
   stroke: var(--mantine-color-dark-1);
-}
-
-.edge-line--divider {
-  stroke: var(--divider-color);
-  stroke-width: 4;
-}
-
-.edge-line--ghost {
-  stroke: var(--mantine-color-dark-3);
-  stroke-width: 1.5;
-  stroke-dasharray: 2 4;
 }
 
 /* Grid-drag preview: shows each touched edge in the state it will end in,
@@ -133,41 +120,38 @@
   stroke-width: 1;
 }
 
-/* ── Split lines (Split tab) ─────────────────────────────── */
-.split-line {
+/* ── Cut segments (Cuts tab) ────────────────────────────── */
+.cut-line {
   cursor: pointer;
 }
-.split-line.is-static {
-  cursor: default;
-}
 
-.split-line-hit {
+.cut-line-hit {
   stroke: transparent;
   stroke-width: 12;
   stroke-linecap: round;
 }
 
-.split-line-visible {
+.cut-line-visible {
   pointer-events: none;
   stroke-linecap: round;
   transition: stroke 100ms;
 }
 
-.split-line-visible--active {
+.cut-line-visible--active {
   stroke: var(--mantine-color-yellow-5);
   stroke-width: 3;
   stroke-dasharray: 7 4;
 }
-.split-line:hover .split-line-visible--active {
+.cut-line:hover .cut-line-visible--active {
   stroke: var(--mantine-color-yellow-4);
 }
 
-.split-line-visible--inactive {
+.cut-line-visible--inactive {
   stroke: var(--mantine-color-dark-2);
   stroke-width: 1;
   stroke-dasharray: 2 5;
 }
-.split-line:hover .split-line-visible--inactive {
+.cut-line:hover .cut-line-visible--inactive {
   stroke: var(--mantine-color-yellow-5);
   stroke-width: 2;
 }
@@ -188,9 +172,6 @@
     var(--open-color) 0 3px,
     transparent 3px 6px
   );
-}
-.legend-swatch--divider {
-  background: var(--divider-color);
 }
 .legend-swatch--custom {
   background: var(--custom-wall-color);

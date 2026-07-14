@@ -1,53 +1,55 @@
 import { NumberInput, Paper, Select, Stack } from '@mantine/core';
-import { PRINTER_PROFILES, checkPieceFit } from '../../../lib/printers';
+import { PRINTER_PROFILES, checkDesignFit } from '../../../lib/printers';
 import { useAppStore } from '../../../store';
 import { Hint } from '../../ui/Field';
 import { StatusBanner } from '../../ui/StatusBanner';
 
 export function PrinterTab() {
-  const { config, printer, setPrinter } = useAppStore();
-  const cells = config.bins.flatMap((bin) => bin.cells);
+  const design = useAppStore((state) => state.design);
+  const setPrinter = useAppStore((state) => state.setPrinter);
+  const printer = design.printer;
   const isCustom = printer.name === 'Custom';
-  const bedFit = checkPieceFit(config.bins, printer);
+  const fit = checkDesignFit(design.bins, printer);
 
   return (
     <Stack gap="md">
       <Select
         label="Printer"
-        data={PRINTER_PROFILES.map((p) => p.name)}
+        data={PRINTER_PROFILES.map((profile) => profile.name)}
         value={printer.name}
         onChange={(name) => {
-          const found = PRINTER_PROFILES.find((p) => p.name === name);
-          if (found) setPrinter(found);
+          const profile = PRINTER_PROFILES.find((value) => value.name === name);
+          if (profile) setPrinter(profile);
         }}
       />
-
       {isCustom && (
         <Paper p="sm" bg="dark.6">
           <Stack gap="sm">
-            {([['bedWidth', 'Bed width'], ['bedDepth', 'Bed depth']] as const).map(([dim, label]) => (
-              <NumberInput
-                key={dim}
-                label={label}
-                min={50}
-                max={1000}
-                suffix=" mm"
-                value={printer[dim]}
-                onChange={(value) => setPrinter({ ...printer, [dim]: Number(value) })}
-              />
-            ))}
+            {([['bedWidth', 'Bed width'], ['bedDepth', 'Bed depth']] as const)
+              .map(([dimension, label]) => (
+                <NumberInput
+                  key={dimension}
+                  label={label}
+                  min={50}
+                  max={1000}
+                  suffix=" mm"
+                  value={printer[dimension]}
+                  onChange={(value) => setPrinter({
+                    ...printer,
+                    [dimension]: Number(value),
+                  })}
+                />
+              ))}
           </Stack>
         </Paper>
       )}
-
-      {cells.length === 0 ? (
+      {design.bins.length === 0 ? (
         <Hint>Select cells in the Shape tab first.</Hint>
       ) : (
-        <StatusBanner ok={bedFit.allFit}>
-          {bedFit.allFit
-            ? `Fits on ${printer.name} (${printer.bedWidth} × ${printer.bedDepth} mm bed)`
-            : `A piece (${bedFit.worst.binWidth} × ${bedFit.worst.binDepth} mm) is too large for
-               the ${printer.name} bed (${printer.bedWidth} × ${printer.bedDepth} mm).`}
+        <StatusBanner ok={fit.allFit}>
+          {fit.allFit
+            ? `${fit.parts} part${fit.parts !== 1 ? 's' : ''} fit the ${printer.name} bed (${printer.bedWidth} × ${printer.bedDepth} mm).`
+            : `A part (${fit.worst.width} × ${fit.worst.depth} mm) exceeds the ${printer.name} bed (${printer.bedWidth} × ${printer.bedDepth} mm).`}
         </StatusBanner>
       )}
     </Stack>

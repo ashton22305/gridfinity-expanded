@@ -8,9 +8,9 @@ import { useBinGeometry } from './hooks/useBinGeometry';
 import { useAppStore } from './store';
 
 export default function App() {
-  const config = useAppStore((s) => s.config);
+  const design = useAppStore((s) => s.design);
   const panelWidths = useAppStore((s) => s.panelWidths);
-  const { previews, pieces, generating, error } = useBinGeometry(config);
+  const { parts, generating, error } = useBinGeometry(design);
 
   return (
     <AppShell
@@ -26,7 +26,7 @@ export default function App() {
           <Text size="sm" fw={600} c="bright" lts="0.02em">
             gridfinity-expanded
           </Text>
-          <ExportMenu pieces={pieces} generating={generating} />
+          <ExportMenu parts={parts} generating={generating} />
         </Group>
       </AppShell.Header>
       <AppShell.Navbar className="app-panel">
@@ -38,7 +38,7 @@ export default function App() {
         <PanelResizeHandle panel="settings" />
       </AppShell.Aside>
       <AppShell.Main className="app-main">
-        <BabylonViewer previews={previews} error={error} />
+        <BabylonViewer parts={parts} error={error} />
       </AppShell.Main>
     </AppShell>
   );

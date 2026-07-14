@@ -1,30 +1,28 @@
 import { Button, Menu } from '@mantine/core';
 import { downloadStl } from '../lib/export/stl';
-import type { PieceStl } from '../hooks/useBinGeometry';
+import type { GeneratedPart } from '../lib/types';
 
 interface Props {
-  pieces: PieceStl[];
+  parts: GeneratedPart[];
   generating: boolean;
 }
 
-// Browsers can throttle bursts of downloads from one gesture; spacing them out
-// makes multi-piece "download all" reliable (some browsers may still prompt).
 const DOWNLOAD_SPACING_MS = 300;
 
-export function ExportMenu({ pieces, generating }: Props) {
-  const disabled = generating || pieces.length === 0;
+export function ExportMenu({ parts, generating }: Props) {
+  const disabled = generating || parts.length === 0;
 
   function downloadAll() {
-    pieces.forEach((piece, i) => {
-      setTimeout(() => downloadStl(piece.buffer, piece.name), i * DOWNLOAD_SPACING_MS);
+    parts.forEach((part, index) => {
+      setTimeout(() => downloadStl(part.mesh, part.filename), index * DOWNLOAD_SPACING_MS);
     });
   }
 
-  if (pieces.length <= 1) {
+  if (parts.length <= 1) {
     return (
       <Button
         disabled={disabled}
-        onClick={() => pieces[0] && downloadStl(pieces[0].buffer, pieces[0].name)}
+        onClick={() => parts[0] && downloadStl(parts[0].mesh, parts[0].filename)}
         title={disabled ? 'Waiting for geometry…' : 'Download STL file'}
       >
         Export STL
@@ -36,17 +34,17 @@ export function ExportMenu({ pieces, generating }: Props) {
     <Menu>
       <Menu.Target>
         <Button disabled={disabled} rightSection="▾">
-          Export STL ({pieces.length} pieces)
+          Export STL ({parts.length} parts)
         </Button>
       </Menu.Target>
       <Menu.Dropdown>
         <Menu.Item fw={600} onClick={downloadAll}>
-          Download all ({pieces.length})
+          Download all ({parts.length})
         </Menu.Item>
         <Menu.Divider />
-        {pieces.map((piece) => (
-          <Menu.Item key={piece.name} onClick={() => downloadStl(piece.buffer, piece.name)}>
-            {piece.name}
+        {parts.map((part) => (
+          <Menu.Item key={part.id} onClick={() => downloadStl(part.mesh, part.filename)}>
+            {part.filename}
           </Menu.Item>
         ))}
       </Menu.Dropdown>

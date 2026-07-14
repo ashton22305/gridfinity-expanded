@@ -1,176 +1,141 @@
-# Geometry Generation Pipeline
+# Gridfinity Geometry Pipeline
 
-## Overview
+This is the canonical specification and architecture record for the alpha generator. It defines the supported happy path from an editor design to previewed and exported triangle meshes. Rule changes must update this document and the relevant happy-path tests in the same change.
 
-Every visible bin — in the 3D preview and in the downloaded STL — comes from the same source: a `BinConfig` object in the Zustand store, run through a `manifold-3d` (WASM) CSG pipeline on a background Web Worker. The pipeline produces two different views of the result from the *same* underlying solid: `previews[]`, grouped and lightly reshaped for the 3D viewer, and `pieces[]`, kept exact for printing. This document walks the whole path from a config edit to STL bytes, and calls out the invariants that keep the canvas, the viewer, and the printed part all showing the same thing.
-
-## Data Flow: Store to STL Buffers
+## Pipeline
 
 ```mermaid
 flowchart LR
-    Store["store.ts<br/>updateBin() / updateConfig()"] --> App["App.tsx<br/>useBinGeometry(config)"]
-    App --> Hook["useBinGeometry hook<br/>debounce 1000ms, track requestId"]
-    Hook -->|"postMessage({config, requestId})"| Worker["geometry.worker.ts<br/>(Web Worker thread)"]
-    Worker --> WasmInit["initManifold()<br/>started at module load"]
-    WasmInit --> Gen["generateBinPieces(wasm, config)"]
-    Gen --> Stl["meshToStl() per mesh"]
-    Stl -->|"postMessage({ok, requestId, previews, pieces})<br/>transferable buffers"| HookState["hook state<br/>{previews, pieces, generating, error}"]
-    HookState --> ExportMenu["ExportMenu<br/>pieces to downloadStl"]
-    HookState --> Viewer["BabylonViewer<br/>previews + error"]
+  Editor["Editor design"] --> Plan["Editable print plan"]
+  Plan --> Worker["Long-lived geometry worker"]
+  Worker --> Build["Build each complete bin once"]
+  Build --> Slice["Slice finished bin into parts"]
+  Slice --> Mesh["Local triangle meshes + repair"]
+  Mesh --> Preview["Babylon VertexData"]
+  Mesh --> STL["Binary STL"]
 ```
 
-Two guards keep this responsive and correct under rapid edits:
+There is one production output: `GeneratedPart[]`. Preview and export consume the same `Float32Array` positions and `Uint32Array` indices. Preview never serializes or loads STL, and export never regenerates geometry.
 
-- **Debounce.** `useBinGeometry` re-serializes `config` to a string (`configKey`) and only restarts a 1000 ms timer when that string changes — so a slider drag or a burst of keystrokes coalesces into a single worker request once the user pauses.
-- **Stale-response discard.** Every request carries a monotonically incrementing `requestId`. If a newer request was issued before an older one's result arrives, the hook drops the stale message by comparing `requestId` against the ref. On a worker error, the hook keeps the *previous* `previews`/`pieces` untouched and only updates `error` — so a bad parameter combination shows an error banner without blanking the last good view.
+## Specification and sources
 
-## State Ownership: store.ts and updateBin()
+`src/lib/gridfinitySpec.ts` is dependency-free and separates three categories:
 
-`store.ts` owns the single `config: BinConfig` object plus the active `printer: PrinterProfile`. `BinConfig.bins` is a `LogicalBin[]`, and each `LogicalBin` carries its own `splitLines: SplitLine[]` — the grid lines that break it into printable pieces.
+1. `GRIDFINITY_SPEC` contains compatibility dimensions.
+2. `GRIDFINITY_DERIVED` contains measurements calculated from those dimensions.
+3. `DESIGN_DEFAULTS` and `IMPLEMENTATION_ALLOWANCES` contain product choices, print-planning clearance, preview spacing, and small CSG/mesh tolerances. They are not Gridfinity requirements.
 
-`updateBin(id, patch)` is the only sanctioned way to mutate a bin. It merges the patch, then calls `withEffectiveSplit()`, which recomputes `splitLines` from the bin's current cells and the active printer's bed size (`computeAutoSplitLines`) unless the bin is `isManual`, in which case the user's manual lines are kept but filtered to only those that still span the bin's cells. Writing directly into `config.bins` through `updateConfig` would skip this reconciliation, and `splitLines` would drift out of sync with the shape or the printer profile — pieces could silently stop fitting the bed. `withEffectiveSplit` also preserves object identity when nothing actually changed, so the debounced effect in `useBinGeometry` doesn't restart for no reason.
+The implemented compatibility profile uses:
 
-## The Worker Boundary: useBinGeometry.ts and geometry.worker.ts
+| Measurement | Value |
+| --- | ---: |
+| Grid pitch | 42 mm |
+| Height unit and total-height formula | 7 mm; `units × 7 mm` |
+| Minimum editor height | 2 units / 14 mm |
+| Outer top width | 41.5 mm |
+| Outer corner radius | 3.75 mm |
+| Base profile height | 4.75 mm |
+| Base bridge height | 2.25 mm, derived to make a 7 mm base |
+| Floor thickness | 1.2 mm, fixed |
+| Default perimeter thickness | 1.2 mm |
+| Default shared fillet | 2.8 mm |
+| Magnet hardware / generated recess | 6 × 2 mm / 6.5 × 2.4 mm |
+| Screw recess | M3 diameter × 6 mm depth |
 
-### Debouncing and request/stale-response guarding
+The top rim is flat. Perimeter thickness is configurable. One shared fillet radius controls planar cavity rounding and floor-to-wall transitions, including internal-wall bases. There are no grid dividers, variable wall heights, floor slopes, or separate cavity-radius setting.
 
-Covered above (Data Flow section) — see `src/hooks/useBinGeometry.ts:36-81`.
+Primary references:
 
-### Why WASM initializes at module load
+- The community-maintained [Gridfinity specification](https://gridfinity.xyz/specification/) records the 42 mm grid, 7 mm height units, 6 × 2 mm magnets, and M3 corner screws.
+- [Gridfinity Rebuilt OpenSCAD](https://github.com/kennetek/gridfinity-rebuilt-openscad) is the maintained parametric reference for the compatible base profile and derived measurements.
+- [Gridfinity Documentation — Original Spec](https://stu142.com/Gridfinity-Documentation/) collects the original bin-profile and hardware-placement drawings.
 
-`geometry.worker.ts` calls `initManifold(() => wasmUrl)` at the top level, not inside `onmessage`:
+These references are still evolving. The constants module is the exact, reviewable statement of what this application currently generates.
 
-```ts
-const manifoldReady = initManifold(() => wasmUrl);
+## Design contract and ownership
+
+`Design` is a plain, structured-clone-safe value containing bins, shared dimensions, fastener settings, and printer settings. Each `BinDesign` owns its cells, perimeter openings, full-height internal walls, and exact cut segments. Separate bins always produce separate complete Gridfinity bins, even when their cells touch.
+
+The Zustand store exposes explicit commands for shape painting, dimensions, fasteners, printers, openings, walls, and cuts. There is no generic configuration patch command. Painting always modifies the bin the user explicitly selected. A shape edit clears that changed bin's openings, walls, and cuts, then seeds cuts required by the current printer.
+
+The future editor rule “painting disconnected from the selected bin starts and selects a new bin, even beside another bin” is intentionally deferred to [issue #58](https://github.com/ashton22305/gridfinity-expanded/issues/58).
+
+## Alpha happy-path assumptions
+
+The generator assumes every supplied bin is edge-connected and otherwise valid. Invalid-domain behavior, including disconnected cells within one bin, is intentionally undefined.
+
+Do not add geometry-side component splitting, automatic bin creation, repair, rejection, fallback generation, or user-facing invalid-input categories. Do not add tests that define disconnected-bin behavior. Contiguity belongs in the editor when issue #58 is implemented.
+
+Enclosed holes are valid. Examples below use `■` for a cell and `·` for empty space:
+
+```text
+Irregular       U-shaped        Ring-shaped
+■■■             ■·■             ■■■
+■■·             ■·■             ■·■
+■··             ■■■             ■■■
 ```
 
-The worker module itself is created once, in `useBinGeometry`'s mount effect, and reused for every subsequent config change — so the WASM cold-start cost (fetch + instantiate the `.wasm` binary) is paid once per app session, overlapped with whatever the user does before their first edit, rather than serially in front of every request. `onmessage` just `await`s the already-in-flight (or already-resolved) `manifoldReady` promise.
+All three are edge-connected. The ring's center is an enclosed perimeter, not a disconnected component.
 
-## Core Domain Model (types.ts, edges.ts, split.ts)
+## Openings and walls
 
-The shared contracts in `src/lib/types.ts`:
+An `Edge` is one canonical unit grid edge in editor row-down coordinates. An opening may lie on an outer perimeter or an enclosed-hole perimeter. If the same edge is a perimeter of two adjacent bins, editing it updates both bins so their coincident faces agree.
 
-- `GridCell { x, y }` — one occupied grid cell.
-- `GridEdge { x, y, orientation: 'h'|'v' }` — a canonical grid-line segment. A `'v'` edge at `(x,y)` is the vertical line at `x·GRID_PITCH`, separating cells `(x-1,y)` and `(x,y)`; an `'h'` edge is the same idea for rows.
-- `SplitLine { axis: 'x'|'y', index }` — a cut at one grid line, used to break a bin into printable pieces.
-- `InnerWall { x1, y1, x2, y2, width, height }` — a free-form wall segment in whole-bin mm coordinates (not grid-aligned); `height: null` means full cavity height.
-- `LogicalBin { id, cells, isManual, splitLines, slope? }` — one complete bin. Separate `LogicalBin` entries are separate, unconnected bins.
-- `BinConfig { bins, heightUnits, wallThickness, cavityCornerRadius, innerFilletRadius, magnetHoles, screwHoles, openEdges, dividerEdges, innerWalls }` — the whole geometry configuration and the exact payload sent to the worker.
+Internal `Wall` values are straight millimetre segments owned by one bin. Each has its own width and always reaches from the cavity floor to the flat top rim. Geometry clips wall footprints to the owning bin, embeds them slightly into the floor for a volume-overlap union, and applies the shared base fillet.
 
-### GridEdge and effectiveWalls() rule engine
+## Editable cuts and print planning
 
-`src/lib/edges.ts`'s `effectiveWalls(pieceCells, wholeBinCells, openEdges, dividerEdges)` turns the user's exception lists into a concrete wall plan for one piece (`EffectiveWalls { walled, open, dividers }`):
+A `Cut` has exact integer-grid endpoints and follows shared cell edges. Cuts contain no automatic/manual mode and no derived global line state.
 
-- A piece-perimeter edge that is also a perimeter edge of the *whole logical bin* defaults to **walled**, unless it's in `openEdges`.
-- A piece-perimeter edge that was **internal** to the whole bin — i.e. it exists only because a split line cut through the bin — is a **seam**. Seams default to **open**, so split pieces glue back into one continuous cavity, unless the user placed a `dividerEdge` exactly there, in which case both adjacent pieces get a full wall.
-- Internal edges (not on the piece's perimeter at all) that have a `dividerEdge` become thin interior **dividers**.
-- Config entries that no longer border the current cell set are silently ignored — shrinking or reshaping a bin never requires migrating `openEdges`/`dividerEdges`.
+`partitionCells()` treats cells as a graph. Cardinal neighbors remain connected unless a cut covers their shared unit edge. This makes a ring cut naturally representable as two or more collinear segments separated by its hole.
 
-`gridfinity.ts` calls this twice per piece: once for the piece's own cells (`walls`) and once for the whole bin (`wholeWalls`), because seam classification and concave-corner handling both need the full-bin cell set, not just the current piece's.
+Default cuts are created recursively:
 
-### partitionCells() and split-piece semantics
+1. Partition by existing cuts.
+2. Find the first part that does not fit the printer in either 0° or 90° orientation, including the planning margin.
+3. Choose the available grid line closest to an equal cell-count bisection.
+4. Add every collinear segment needed to sever that current part at the chosen line.
+5. Repeat until all parts fit or no candidate remains.
 
-`src/lib/split.ts`'s `partitionCells(cells, splitLines)` buckets each cell into a `(col, row)` chunk by counting how many split-line indices per axis the cell's coordinate is at or past, then groups same-chunk cells into a `Piece`. With no split lines it short-circuits to a single piece holding every cell. `flattenBins(bins)` tags every cell with its owning bin id — used for the store's grid-size calculation, `printers.ts`'s auto-split search, and (here) computing the shared layout height used when mirroring previews.
+Users can add, remove, move, or reset the stored segments directly. The editor offers only internal shared-edge candidates; it is not a general polygon validator. Changing printers preserves a fitting user plan. If it no longer fits, the store keeps existing cuts and adds only the bisections required by the happy-path calculation.
 
-## Building One Bin's Solid: generatePieceManifold()
+## Geometry generation
 
-`generatePieceManifold(wasm, config, cells, binCells, binOuterCS, walls, slope)` (`src/lib/geometry/gridfinity.ts:565-614`) builds one piece's solid. Both public entry points below funnel through it — once per bin for `generateBinManifold`, once per split piece for `generateBinPieces`.
+`generateDesignParts()` is the only production generator. For each logical bin it:
 
-```mermaid
-flowchart TD
-    A["partitionCells(bin.cells, bin.splitLines)<br/>Piece[] (split.ts)"] --> B["resolveWalls / effectiveWalls<br/>(edges.ts)"]
-    C["buildOuterProfile(wasm, bin.cells)<br/>shared whole-bin CrossSection, built once per bin"] --> D["pieceProfileCS: outer wall CrossSection<br/>whole-bin profile, intersected with the<br/>piece's own rect on split axes"]
-    B --> D
-    E["pegSections per cell<br/>Manifold.hull of lofted chamfer CrossSections"] --> F["Manifold.union(pegs + extruded wall column)<br/>result: bin"]
-    D --> F
-    F --> G["planCavity + buildCavityManifold<br/>cavity rectangles, corner rounding,<br/>lofted concave floor fillet"]
-    G --> H["bin.subtract(cavity.solid)"]
-    H --> I{"inner walls or<br/>sloped base?"}
-    I -->|yes| J["Manifold.union([bin, innerWalls, slopeWedge])"]
-    I -->|no| K["bin.subtract(magnet/screw hole union)"]
-    J --> K
-    K --> L["bin.simplify(1e-3)"]
-    L --> M["manifoldMesh(solid)<br/>weld at 1e-3mm, repair degenerate triangles"]
-    M --> N["pieces[]: translate to origin,<br/>mirrorMeshY - exact print topology"]
-    M --> O["previews[]: clipPreviewManifold (seam inset),<br/>mirrorMeshY, concat per logical bin"]
-```
+1. Converts editor row-down coordinates to model `+Y` coordinates.
+2. Builds every Gridfinity base profile and the complete outer body.
+3. Plans openings and perimeter material, then subtracts one cavity whose corner and floor transitions share the configured fillet.
+4. Unions all full-height internal walls with real overlap.
+5. Subtracts magnet and/or M3 recesses.
+6. Intersects the finished bin with each cut-planned part footprint, so seams slice the body, walls, fillets, and hardware consistently.
+7. Calls `manifoldMesh()` on every sliced solid.
+8. Translates each mesh into final local print coordinates and calls `repairMesh()` again at the final `Float32` precision.
 
-Notable construction details:
+The build uses native `manifold-3d` `CrossSection` and `Manifold` booleans. Individually closed primitives and small non-normative overlap prevent coincident-face membranes. There is no geometry-side connected-component normalization.
 
-- **Connector pegs** are built per cell as three lofted, chamfered `CrossSection`s (`Manifold.hull` between profiles) so the peg has the spec's bottom lead-in chamfer, straight mid-section, and top widening chamfer, flush at `z = PEG_HEIGHT = 4.75` — a coordinate chosen because it's exactly float32-representable, so the boolean fuses the interface instead of leaving a seam.
-- **The outer wall** always uses the Gridfinity-spec profile (41.5 mm top width, `PEG_R_TOP = 3.75` mm corner radius) — `cavityCornerRadius` only affects the interior cavity, never the outer wall, so bins always stack and nest correctly regardless of user settings.
-- **The cavity floor fillet** (`buildFloorFillet`) is built by lofting a sequence of intersected, offset `CrossSection`s at increasing radii, hulled between consecutive steps — this produces one continuous concave round at the floor-to-wall junction rather than a stack of visible terraces.
-- **Interior additions** (free-form `innerWalls`, the sloped-base wedge from `buildSlopedBaseManifold`, which cuts a prism with `Manifold.trimByPlane`) are deliberately unioned with material overlap (`WALL_EMBED`, `CSG_EPSILON`) rather than flush contact, so the boolean fuses through real volume instead of leaving a coincident-face membrane.
-- **The final `simplify(1e-3)`** removes exactly-collinear vertices that boolean triangulation leaves along flush junction lines — ten times finer than the `CSG_EPSILON` overlaps, so it only removes triangulation artifacts, never real surface detail.
+## Coordinates and orientation
 
-## generateBinPieces() vs generateBinManifold()
+The store keeps the editor's natural row-down coordinates. The geometry boundary performs the only handedness normalization:
 
-`generateBinManifold(wasm, config)` ignores `splitLines` entirely: each `LogicalBin` becomes one `Manifold` solid, and if there are multiple bins they're unioned into a single mesh. It's used (a) as the empty-bins fallback inside `generateBinPieces`, and (b) as the target of `scripts/check-manifold.ts`'s printability sweep. **The worker never calls it directly.**
+- editor cell `(x, y)` becomes model cell `(x, -y - 1)`;
+- editor grid point `(x, y)` becomes model point `(x, -y)`;
+- edges, cuts, and wall endpoints follow the same mapping.
 
-`generateBinPieces(wasm, config)` — the function the worker actually calls — is split-aware. For each `LogicalBin` it partitions cells into `Piece[]`, builds one shared whole-bin outer profile (so every split piece's seam lines up on the bin's own pitch grid instead of getting an independently rounded edge), and for each `Piece` produces the *same* underlying `Manifold` solid feeding two divergent outputs (see next section).
+No mesh is mirrored later. A `GeneratedPart.mesh` is Z-up and part-local, with its minimum X, Y, and Z at zero. `layoutPosition` restores its model-space design position for preview. Babylon applies only a rigid `-90°` X rotation to display Z-up geometry in its Y-up scene.
 
-## Preview vs. Export Divergence
+## Preview and export
 
-Both outputs are derived from the identical per-piece `Manifold` solid, but diverge before serialization:
+The worker initializes Manifold once, accepts `{ design, requestId }`, and transfers typed mesh buffers back with the same request ID. The hook keeps one worker alive, debounces edits, and ignores stale responses. Unexpected exceptions enter the generic generation-failure state; they are not interpreted as domain-validation results.
 
-| Aspect | `previews[]` (viewer) | `pieces[]` (export) |
-|---|---|---|
-| Grouping | One mesh per **logical bin** — all its split pieces concatenated (`concatMeshes`) | One mesh per **split piece** — an independent file |
-| Coordinates | Whole-layout mm coordinates, shared across all bins so relative bin positions are correct in the 3D view | Piece-local — each piece is translated so its own bounding-box minimum sits at the origin, independent of layout position |
-| Cosmetic seam gap | Yes — `PREVIEW_INSET = 0.15` mm per side via `clipPreviewManifold`, applied only on axes that actually have a split line, done by **clipping** (not scaling, which would distort rounded/concave corners) | No — exact, unmodified seam-face topology, so printed pieces glue flush |
-| Color | Colored per bin by the viewer (`binColor()`) | None — plain STL has no color channel |
-| Orientation | Mirrored in Y (see next section) | Also mirrored in Y — identical to previews, so the view always matches what prints |
-| Naming | Tagged by `bin: number` (logical bin id) | Tagged by `name: string`, e.g. `gridfinity-bin.stl`, `gridfinity-bin-2-piece-1-of-3.stl` (`pieceName()`) |
+`BabylonViewer` constructs a Babylon `Mesh` and `VertexData` directly from every generated mesh. It uses `layoutPosition` plus the preview-only `previewOffset`. Each distinct cut line shifts parts by half of the 0.3 mm gap on opposite sides, so adjacent preview faces separate by 0.3 mm. The mesh arrays remain unchanged.
 
-Both pass through the same `manifoldMesh()`/`repairMesh()` weld-and-repair boundary and the same `meshToStl()` binary serializer — the divergence is entirely in which `Manifold` variant is fed in and what coordinate transform runs before serialization.
+STL export computes facet normals and serializes those same unchanged part-local arrays. It does not apply layout positions or preview offsets. Multipart STL files therefore retain exact seam topology and individual part meaning.
 
-## The Y-Mirror Invariant
+## Printability and required tests
 
-```mermaid
-flowchart LR
-    A["SVG shape/wall/split editors<br/>y increases downward on screen"] -->|"mapped straight to mm +y"| B["Generated solid before mirroring<br/>chiral mirror of the drawn layout"]
-    B --> C["mirrorMeshY(mesh, offset)<br/>y to offset minus y, reverse triangle winding<br/>gridfinity.ts:662"]
-    C --> D["Mirrored mesh - applied to BOTH<br/>pieces[] and previews[]"]
-    D --> E["BabylonViewer: must NOT re-mirror<br/>see docs/babylon-viewer.md"]
-```
+`manifoldMesh()` welds and repairs the extracted indexed mesh. `repairMesh()` must run again after final localization because `Float32` coordinate writes can create degenerate slivers that did not exist before the transform.
 
-The 2D editors map screen-down to mm `+y`, while solids extrude upward in `+z`. Left uncorrected, a part built straight from those coordinates would be the chiral mirror of what's drawn. `mirrorMeshY(mesh, offset)` (`gridfinity.ts:662-672`) fixes this once, at the geometry boundary, for *every* output mesh — both `pieces[]` and `previews[]` — by reflecting `y → offset − y` and reversing each triangle's winding so normals stay outward. Because this happens once, upstream of both consumers, the canvas, the 3D preview, and the printed part always agree.
+`npm run check:manifold` exercises the production function only. Its fixtures cover multiple valid bins, irregular/U/ring shapes, holes, outer and hole openings, shared fillets, full-height and crossing walls, both hardware recesses, recursive and ring cuts, post-build wall slicing, local coordinates, model orientation, preview offsets, and binary STL topology.
 
-This is why `AGENTS.md` states: "Do not compensate for orientation in the viewer." If the viewer applied its own mirror on top of this, the two mirrors would cancel out and silently regress to showing the *wrong* (chiral) orientation relative to the 2D editors. See [`docs/babylon-viewer.md`](./babylon-viewer.md#the-mirroring-invariant-viewer-side) for how the viewer avoids doing exactly that.
-
-## Mesh Repair and Validation
-
-### manifoldMesh() / repairMesh() / repairDegenerateTris()
-
-`src/lib/geometry/manifold.ts` sits at every point a `Manifold` is turned into plain arrays, or those arrays are rewritten by a coordinate transform (translate, mirror):
-
-- `manifoldMesh(manifold)` extracts `{vertProperties, triVerts}` from a finished `Manifold` and runs `repairMesh()`.
-- `repairMesh(mesh)` welds vertices onto a 1 µm (`OUT_WELD = 1e3`) grid — coarse enough to merge the sub-micron near-coincidences a robust boolean can leave where differently-faceted surfaces meet, fine enough to never merge genuinely distinct geometry — then drops any triangle collapsed by that welding, then calls `repairDegenerateTris`.
-- `repairDegenerateTris(vp, tris)` handles a different failure mode: a triangle that's valid in the WASM engine's float64 mesh can become exactly zero-area once its vertices are truncated to `Float32Array`. Simply dropping such a triangle would open a hole, so instead the neighbor across its longest edge is split at the sliver's middle vertex, keeping every directed edge paired and the mesh closed.
-- Every output mesh calls `repairMesh` again after any post-extraction coordinate rewrite (translate, mirror) — the doc comment on `manifoldMesh` notes repair must happen "at the same precision callers receive," since a rewrite can introduce new float32-quantization slivers that didn't exist in the original extraction.
-
-### meshValidation.ts (known gap: not wired into the worker or check-manifold.ts)
-
-`src/lib/geometry/meshValidation.ts`'s `indexedMeshValidationError(mesh)` is a lightweight, dependency-free structural check (finite coordinates, in-range indices, no repeated-vertex or zero-area triangles) whose own doc comment says it's meant to "protect the worker export boundary." As of this writing it has **no call site outside its own unit test** — it isn't invoked from `geometry.worker.ts` or from `scripts/check-manifold.ts`. Treat it as an available guard, not an active one, until it's wired in somewhere.
-
-## STL Serialization (export/stl.ts)
-
-`meshToStl(vertProperties, triVerts)` (`src/lib/export/stl.ts:24-52`) hand-writes binary STL: an 84-byte header (80 bytes free-form + a 4-byte triangle count) followed by 50 bytes per triangle (a computed face normal, three vertex positions, all little-endian float32, plus a 2-byte zero attribute count). It runs **inside the worker**, for every mesh in both `previews` and `pieces` — even preview meshes get STL-serialized, since the pipeline standardizes on binary STL as its one wire format between the worker and the main thread, and Babylon's STL loader is what turns those bytes back into a scene (see [`docs/babylon-viewer.md`](./babylon-viewer.md)). `downloadStl`/`downloadBuffer` are separate, browser-only helpers `ExportMenu` uses to trigger a file download; they don't run in the worker.
-
-## Printability Gate: scripts/check-manifold.ts
-
-`npm run check:manifold` runs `scripts/check-manifold.ts`, which imports `generateBinManifold`/`generateBinPieces` directly (bypassing the worker and the debounce/request machinery entirely) and sweeps a matrix of `BinConfig` fixtures. For each resulting mesh — and for the STL `meshToStl` produces from it — it asserts the triangle mesh is a closed, watertight 2-manifold: every edge shared by exactly two oppositely-wound triangles, no boundary edges, no non-manifold edges, no degenerate or duplicate faces. This is the project's printability gate; per `AGENTS.md`, it must pass for every change touching geometry, split-piece generation, STL serialization, walls, slopes, fasteners, worker generation, or geometry-consumed configuration.
-
-## Key Constants Reference
-
-| Constant | Value | Meaning |
-|---|---|---|
-| `GRID_PITCH` | 42 mm | Gridfinity cell pitch |
-| `HEIGHT_PER_UNIT` | 7 mm | mm per height unit |
-| `BASE_TOTAL_HEIGHT` | 7 mm | connector peg (4.75 mm) + bridge (2.25 mm) |
-| `FLOOR_THICKNESS` | 1.2 mm | cavity floor thickness |
-| `PEG_R_TOP` / `OUTER_R` | 3.75 mm | outer wall corner radius — always spec, independent of `cavityCornerRadius` |
-| `CSG_EPSILON` | 0.01 mm | deliberate overlap so unioned solids fuse through real volume instead of leaving a flush, coincident-face membrane |
-| `PREVIEW_INSET` | 0.15 mm | per-side cosmetic seam gap, preview only |
-| `WALL_EMBED` | 0.5 mm | how far interior additions (inner walls, slope wedge) embed into existing material before unioning |
-| `OUT_WELD` (manifold.ts) | 1e3 (1 µm grid) | vertex-welding precision in `repairMesh` |
+Happy-path unit tests cover specification values, `units × 7 mm`, coordinate normalization, selected-bin painting, holes and shared openings, editable cuts, recursive bisection, and printer rotation. Browser tests cover the visible 21 mm height, selected-bin painting, removed controls, cut editing/reset, direct typed-mesh preview, multipart transforms, and STL export.

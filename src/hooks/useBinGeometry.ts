@@ -1,84 +1,67 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { BinConfig } from '../lib/types';
+import type {
+  Design,
+  GenerateGeometryRequest,
+  GenerateGeometryResponse,
+  GeneratedPart,
+} from '../lib/types';
 
-const DEBOUNCE_MS = 1000;
+const DEBOUNCE_MS = 300;
 
-export interface PieceStl {
-  name: string;
-  buffer: ArrayBuffer;
-}
-
-export interface PreviewStl {
-  bin: number;
-  buffer: ArrayBuffer;
-}
-
-interface GeometryState {
-  previews: PreviewStl[];
-  pieces: PieceStl[];
+export interface GeometryState {
+  parts: GeneratedPart[];
   generating: boolean;
   error: string | null;
 }
 
-type WorkerResult =
-  | { ok: true; previews: PreviewStl[]; pieces: PieceStl[]; requestId: number }
-  | { ok: false; error: string; requestId: number };
-
-export function useBinGeometry(config: BinConfig): GeometryState {
+export function useBinGeometry(design: Design): GeometryState {
   const [state, setState] = useState<GeometryState>({
-    previews: [],
-    pieces: [],
+    parts: [],
     generating: false,
     error: null,
   });
-
-  // JSON key gates the effect so it only re-fires when config actually changes value.
-  const configKey = useMemo(() => JSON.stringify(config), [config]);
+  const designKey = useMemo(() => JSON.stringify(design), [design]);
   const workerRef = useRef<Worker | null>(null);
   const requestIdRef = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // One long-lived worker reused across config changes, instead of re-spawning
-  // (and re-paying module bootstrap cost) on every debounced edit.
   useEffect(() => {
     const worker = new Worker(
       new URL('../workers/geometry.worker.ts', import.meta.url),
       { type: 'module' },
     );
     workerRef.current = worker;
-
-    worker.onmessage = (e: MessageEvent<WorkerResult>) => {
-      const data = e.data;
-      if (data.requestId !== requestIdRef.current) return; // superseded — discard stale result
-      if (data.ok) {
-        setState({ previews: data.previews, pieces: data.pieces,
-          generating: false, error: null });
+    worker.onmessage = (event: MessageEvent<GenerateGeometryResponse>) => {
+      const response = event.data;
+      if (response.requestId !== requestIdRef.current) return;
+      if (response.ok) {
+        setState({ parts: response.parts, generating: false, error: null });
       } else {
-        setState((s) => ({ ...s, generating: false, error: data.error }));
+        setState((current) => ({ ...current, generating: false, error: response.error }));
       }
     };
-
     worker.onerror = () => {
-      setState((s) => ({ ...s, generating: false, error: 'Geometry worker failed to load.' }));
+      setState((current) => ({
+        ...current,
+        generating: false,
+        error: 'Geometry worker failed to load.',
+      }));
     };
-
     return () => worker.terminate();
   }, []);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-
     debounceRef.current = setTimeout(() => {
       const requestId = ++requestIdRef.current;
-      setState((s) => ({ ...s, generating: true, error: null }));
-      workerRef.current?.postMessage({ config, requestId });
+      const request: GenerateGeometryRequest = { design, requestId };
+      setState((current) => ({ ...current, generating: true, error: null }));
+      workerRef.current?.postMessage(request);
     }, DEBOUNCE_MS);
-
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configKey]);
+  }, [design, designKey]);
 
   return state;
 }

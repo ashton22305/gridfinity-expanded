@@ -1,11 +1,8 @@
 // Manifold engine initialization and output mesh repair boundary.
 import Module from 'manifold-3d';
 import type { ManifoldToplevel, Manifold } from 'manifold-3d';
-
-export interface BinMesh {
-  vertProperties: Float32Array;  // flat xyz, 3 per vertex
-  triVerts: Uint32Array;         // 3 vertex indices per triangle
-}
+import { IMPLEMENTATION_ALLOWANCES } from '../gridfinitySpec';
+import type { TriangleMesh } from '../types';
 
 let cached: Promise<ManifoldToplevel> | null = null;
 
@@ -28,7 +25,7 @@ export function initManifold(locateWasm?: () => string): Promise<ManifoldTopleve
 // sub-micron near-coincidences a robust boolean leaves where differently-faceted
 // surfaces meet, yet 10x finer than the smallest intended feature — so it fuses
 // only artifacts, never distinct geometry.
-const OUT_WELD = 1e3;
+const OUT_WELD = 1 / IMPLEMENTATION_ALLOWANCES.meshWeldStep;
 
 /**
  * Extracts the triangle mesh from a finished `Manifold` and welds
@@ -40,18 +37,18 @@ const OUT_WELD = 1e3;
  * collapsed triangles removes the slivers while preserving the closed manifold —
  * so no slicer flags a degenerate facet or a vertex-welded non-manifold edge.
  */
-export function manifoldMesh(manifold: Manifold): BinMesh {
+export function manifoldMesh(manifold: Manifold): TriangleMesh {
   const mesh = manifold.getMesh();
   return repairMesh({
-    vertProperties: new Float32Array(mesh.vertProperties),
-    triVerts: new Uint32Array(mesh.triVerts),
+    positions: new Float32Array(mesh.vertProperties),
+    indices: new Uint32Array(mesh.triVerts),
   });
 }
 
 /** Weld and repair a mesh after any coordinate transform or float32 write. */
-export function repairMesh(mesh: BinMesh): BinMesh {
-  const src = mesh.vertProperties;
-  const srcTris = mesh.triVerts;
+export function repairMesh(mesh: TriangleMesh): TriangleMesh {
+  const src = mesh.positions;
+  const srcTris = mesh.indices;
 
   const remap = new Uint32Array(src.length / 3);
   const index = new Map<string, number>();
@@ -82,7 +79,7 @@ export function repairMesh(mesh: BinMesh): BinMesh {
   }
   tris = repairDegenerateTris(out, tris);
 
-  return { vertProperties: new Float32Array(out), triVerts: new Uint32Array(tris) };
+  return { positions: new Float32Array(out), indices: new Uint32Array(tris) };
 }
 
 /**

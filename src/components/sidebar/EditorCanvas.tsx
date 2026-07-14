@@ -1,5 +1,5 @@
 import { useMemo, type ComponentProps } from 'react';
-import type { DisplayCell } from '../../lib/split';
+import type { DisplayCell } from '../../lib/cuts';
 import { binColor } from './binColors';
 import { CELL, PAD } from './editorCoords';
 import './editor.css';
@@ -12,7 +12,7 @@ interface EditorCanvasProps extends ComponentProps<'svg'> {
 
 /**
  * Base layer of the grid editors: the empty-grid background and the selected
- * cells tinted by bin color. Overlays (edges, walls, split lines) render as
+ * cells tinted by bin color. Overlays (edges, walls, cut segments) render as
  * children on top. Both layers are memoized — consumers re-render on every
  * pointer move while drawing, and the background alone is up to 1600 rects.
  */
@@ -42,8 +42,8 @@ export function EditorCanvas({ gridCols, gridRows, cells, children, ...svgProps 
     () =>
       cells.map((c) => (
         <rect
-          key={`c${c.x},${c.y}`}
-          fill={binColor(c.bin)}
+          key={`c${c.binId}:${c.x},${c.y}`}
+          fill={binColor(c.binId)}
           fillOpacity={0.22}
           x={PAD + c.x * CELL}
           y={PAD + c.y * CELL}

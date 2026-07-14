@@ -1,85 +1,99 @@
-export interface GridCell {
+export interface Cell {
   x: number;
   y: number;
 }
 
+export interface Point2 {
+  x: number;
+  y: number;
+}
+
+export interface GridPoint extends Point2 {}
+
 export type EdgeOrientation = 'h' | 'v';
 
 /**
- * Canonical grid edge.
- * 'v' edge at (x, y): vertical segment on grid line x·PITCH spanning y·PITCH → (y+1)·PITCH;
- *                     separates cell (x-1, y) from cell (x, y).
- * 'h' edge at (x, y): horizontal segment on grid line y·PITCH spanning x·PITCH → (x+1)·PITCH;
- *                     separates cell (x, y-1) from cell (x, y).
+ * Canonical unit grid edge in editor coordinates, where rows increase down.
+ * A vertical edge at (x, y) runs from (x, y) to (x, y + 1); a horizontal
+ * edge runs from (x, y) to (x + 1, y).
  */
-export interface GridEdge {
+export interface Edge {
   x: number;
   y: number;
   orientation: EdgeOrientation;
 }
 
-/** Split at a grid line: 'x' → vertical line between columns index-1 and index. */
-export interface SplitLine {
-  axis: 'x' | 'y';
-  index: number;
+/** Straight, full-height wall in editor millimetres. */
+export interface Wall {
+  start: Point2;
+  end: Point2;
+  width: number;
 }
 
-/**
- * Free-form inner wall: a straight segment in whole-bin mm coordinates, not
- * grid-aligned. Clipped to the bin interior; where it is lower than the outer
- * walls, a concave ramp blends its top into any taller structure it touches.
- */
-export interface InnerWall {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  width: number;         // mm
-  height: number | null; // mm above the cavity floor; null = full height
+/** Axis-aligned cut whose endpoints lie on exact grid points. */
+export interface Cut {
+  start: GridPoint;
+  end: GridPoint;
 }
 
-export interface BinConfig {
-  bins: LogicalBin[];
-  heightUnits: number;
-  wallThickness: number;        // mm, slider 0.8–4.0
-  cavityCornerRadius: number;   // cavity interior corner rounding in mm; outer wall is always spec
-  innerFilletRadius: number;    // concave fillet radius at the cavity floor-to-wall junction in mm
-  magnetHoles: boolean;         // 6.5mm × 2.4mm recesses in base for N52 disc magnets
-  screwHoles: boolean;          // M3 pilot holes inside each magnet recess
-  openEdges: GridEdge[];        // perimeter edges whose wall is REMOVED (exceptions to the default)
-  dividerEdges: GridEdge[];     // internal edges with a divider wall ADDED (exceptions to the default)
-  innerWalls: InnerWall[];      // free-form (non-grid-aligned) walls inside the cavity
+export interface FastenerSettings {
+  magnets: boolean;
+  m3: boolean;
 }
 
-export type SlopeDir = '+x' | '-x' | '+y' | '-y';  // side the floor is LOWEST at (shape-editor axes)
-
-/** Cavity floor tilt for one logical bin; walls stay vertical, base stays spec. */
-export interface BinSlope {
-  angle: number;   // degrees, 0 = flat
-  dir: SlopeDir;
-}
-
-/** A complete logical bin and all state whose lifetime belongs to it. */
-export interface LogicalBin {
-  id: number;
-  cells: GridCell[];
-  isManual: boolean;
-  splitLines: SplitLine[]; // effective lines consumed by geometry
-  slope?: BinSlope;        // absent = flat
-}
-
-export interface PrinterProfile {
+export interface PrinterSettings {
   name: string;
   bedWidth: number;
   bedDepth: number;
 }
 
+export interface BinDesign {
+  id: string;
+  cells: Cell[];
+  openings: Edge[];
+  walls: Wall[];
+  cuts: Cut[];
+}
+
+/** Plain editor-owned input sent across the worker boundary. */
+export interface Design {
+  bins: BinDesign[];
+  heightUnits: number;
+  perimeterThickness: number;
+  filletRadius: number;
+  fasteners: FastenerSettings;
+  printer: PrinterSettings;
+}
+
+/** Indexed triangles in final, part-local print coordinates. */
+export interface TriangleMesh {
+  positions: Float32Array;
+  indices: Uint32Array;
+}
+
+export interface GeneratedPart {
+  id: string;
+  binId: string;
+  filename: string;
+  mesh: TriangleMesh;
+  /** Model-space placement that restores the design layout for preview. */
+  layoutPosition: Point2;
+  /** Preview-only transform; never applied to the printable mesh. */
+  previewOffset: Point2;
+}
+
 export interface BedFitResult {
   fits: boolean;
-  binWidth: number;
-  binDepth: number;
-  rotated?: boolean;
-  bin?: number; // logical bin id; present when checking bin-tagged cells spanning multiple bins
-  col?: number; // split-piece column; present when returned from checkPieceFit
-  row?: number; // split-piece row; present when returned from checkPieceFit
+  width: number;
+  depth: number;
+  rotated: boolean;
 }
+
+export interface GenerateGeometryRequest {
+  requestId: number;
+  design: Design;
+}
+
+export type GenerateGeometryResponse =
+  | { ok: true; requestId: number; parts: GeneratedPart[] }
+  | { ok: false; requestId: number; error: string };
