@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { buildGeometryInput } from '../lib/geometryInput';
 import type {
   Design,
   GenerateGeometryRequest,
@@ -20,9 +21,9 @@ export function useBinGeometry(design: Design): GeometryState {
     generating: false,
     error: null,
   });
-  const designKey = useMemo(() => JSON.stringify(design), [design]);
+  const input = useMemo(() => buildGeometryInput(design), [design]);
   const workerRef = useRef<Worker | null>(null);
-  const requestIdRef = useRef(0);
+  const revisionRef = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -33,7 +34,7 @@ export function useBinGeometry(design: Design): GeometryState {
     workerRef.current = worker;
     worker.onmessage = (event: MessageEvent<GenerateGeometryResponse>) => {
       const response = event.data;
-      if (response.requestId !== requestIdRef.current) return;
+      if (response.revision !== revisionRef.current) return;
       if (response.ok) {
         setState({ parts: response.parts, generating: false, error: null });
       } else {
@@ -44,7 +45,7 @@ export function useBinGeometry(design: Design): GeometryState {
       setState((current) => ({
         ...current,
         generating: false,
-        error: 'Geometry worker failed to load.',
+        error: 'Geometry generation failed.',
       }));
     };
     return () => worker.terminate();
@@ -53,15 +54,15 @@ export function useBinGeometry(design: Design): GeometryState {
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      const requestId = ++requestIdRef.current;
-      const request: GenerateGeometryRequest = { design, requestId };
+      const revision = ++revisionRef.current;
+      const request: GenerateGeometryRequest = { input, revision };
       setState((current) => ({ ...current, generating: true, error: null }));
       workerRef.current?.postMessage(request);
     }, DEBOUNCE_MS);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [design, designKey]);
+  }, [input]);
 
   return state;
 }

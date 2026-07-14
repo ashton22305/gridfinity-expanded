@@ -1,5 +1,3 @@
-import type { TriangleMesh } from '../types';
-
 export function downloadBuffer(buffer: ArrayBuffer, filename: string, mimeType: string): void {
   const blob = new Blob([buffer], { type: mimeType });
   const url = URL.createObjectURL(blob);
@@ -10,28 +8,36 @@ export function downloadBuffer(buffer: ArrayBuffer, filename: string, mimeType: 
   URL.revokeObjectURL(url);
 }
 
-/** Serialize the exact generated triangle arrays to binary STL. */
-export function meshToStl(mesh: TriangleMesh): ArrayBuffer {
-  const { positions, indices } = mesh;
-  const triangleCount = indices.length / 3;
+export function partFilename(
+  binIndex: number,
+  binCount: number,
+  partIndex: number,
+  partCount: number,
+): string {
+  const stem = binCount === 1 ? 'gridfinity-bin' : `gridfinity-bin-${binIndex + 1}`;
+  return partCount === 1
+    ? `${stem}.stl`
+    : `${stem}-part-${partIndex + 1}-of-${partCount}.stl`;
+}
+
+/** Serialize the exact generated triangle soup to binary STL. */
+export function trianglesToStl(triangles: Float32Array): ArrayBuffer {
+  const triangleCount = triangles.length / 9;
   const buffer = new ArrayBuffer(84 + triangleCount * 50);
   const view = new DataView(buffer);
   view.setUint32(80, triangleCount, true);
 
   let offset = 84;
-  for (let index = 0; index < indices.length; index += 3) {
-    const a = indices[index] * 3;
-    const b = indices[index + 1] * 3;
-    const c = indices[index + 2] * 3;
-    const ax = positions[a], ay = positions[a + 1], az = positions[a + 2];
-    const bx = positions[b], by = positions[b + 1], bz = positions[b + 2];
-    const cx = positions[c], cy = positions[c + 1], cz = positions[c + 2];
+  for (let index = 0; index < triangles.length; index += 9) {
+    const ax = triangles[index], ay = triangles[index + 1], az = triangles[index + 2];
+    const bx = triangles[index + 3], by = triangles[index + 4], bz = triangles[index + 5];
+    const cx = triangles[index + 6], cy = triangles[index + 7], cz = triangles[index + 8];
     const ux = bx - ax, uy = by - ay, uz = bz - az;
     const vx = cx - ax, vy = cy - ay, vz = cz - az;
     let nx = uy * vz - uz * vy;
     let ny = uz * vx - ux * vz;
     let nz = ux * vy - uy * vx;
-    const length = Math.hypot(nx, ny, nz) || 1;
+    const length = Math.hypot(nx, ny, nz);
     nx /= length;
     ny /= length;
     nz /= length;
@@ -39,22 +45,18 @@ export function meshToStl(mesh: TriangleMesh): ArrayBuffer {
     view.setFloat32(offset, nx, true);
     view.setFloat32(offset + 4, ny, true);
     view.setFloat32(offset + 8, nz, true);
-    view.setFloat32(offset + 12, ax, true);
-    view.setFloat32(offset + 16, ay, true);
-    view.setFloat32(offset + 20, az, true);
-    view.setFloat32(offset + 24, bx, true);
-    view.setFloat32(offset + 28, by, true);
-    view.setFloat32(offset + 32, bz, true);
-    view.setFloat32(offset + 36, cx, true);
-    view.setFloat32(offset + 40, cy, true);
-    view.setFloat32(offset + 44, cz, true);
-    offset += 48;
-    view.setUint16(offset, 0, true);
-    offset += 2;
+    for (let vertex = 0; vertex < 9; vertex++) {
+      view.setFloat32(offset + 12 + vertex * 4, triangles[index + vertex], true);
+    }
+    view.setUint16(offset + 48, 0, true);
+    offset += 50;
   }
   return buffer;
 }
 
-export function downloadStl(mesh: TriangleMesh, filename = 'gridfinity-bin.stl'): void {
-  downloadBuffer(meshToStl(mesh), filename, 'model/stl');
+export function downloadStl(
+  triangles: Float32Array,
+  filename = 'gridfinity-bin.stl',
+): void {
+  downloadBuffer(trianglesToStl(triangles), filename, 'model/stl');
 }

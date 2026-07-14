@@ -93,3 +93,31 @@ test('edits seeded cuts, previews multipart gaps, and exports the same generated
     (window as typeof window & { __blobUrlCalls: number }).__blobUrlCalls)).toBe(1);
   expect(errors).toEqual([]);
 });
+
+test('renders an L-shaped triangle soup in editor orientation and resets the orbit', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  await page.goto('/');
+
+  await page.getByRole('button', { name: 'Cell 1,1' }).click();
+  await expect(page.getByText('3 cells', { exact: true })).toBeVisible();
+
+  const viewer = page.locator('.viewer');
+  await expect(viewer).toHaveAttribute('data-part-count', '1', { timeout: 30_000 });
+  await expect(viewer).toHaveAttribute('data-coordinate-orientation', 'editor-row-down');
+  await expect(viewer).toHaveAttribute('data-mesh-topology', 'flat-triangle-soup');
+
+  const canvas = page.locator('canvas.viewer-canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds!.x + bounds!.width * 0.65, bounds!.y + bounds!.height * 0.55);
+  await page.mouse.up();
+  await page.getByRole('button', { name: 'Reset view' }).click();
+  await expect(canvas).toBeVisible();
+  expect(errors).toEqual([]);
+});

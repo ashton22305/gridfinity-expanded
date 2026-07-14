@@ -20,7 +20,7 @@ import {
 import type { GeneratedPart } from '../../lib/types';
 import { binColor } from '../sidebar/binColors';
 
-const DEFAULT_ALPHA = Math.PI / 4;
+const DEFAULT_ALPHA = -Math.PI / 4;
 const DEFAULT_BETA = Math.PI * 0.32;
 const DEFAULT_RADIUS = 140;
 const FIT_MARGIN = 1.08;
@@ -156,27 +156,30 @@ export function BabylonViewer({ parts, error }: Props) {
     currentRef.current.meshes.forEach((mesh) => mesh.dispose());
     currentRef.current.materials.forEach((material) => material.dispose());
     const materials = new Map<string, StandardMaterial>();
-    const meshes = parts.map((part) => {
-      let material = materials.get(part.binId);
+    const meshes = parts.map((part, partIndex) => {
+      const binKey = `bin-${part.binIndex + 1}`;
+      let material = materials.get(binKey);
       if (!material) {
-        material = new StandardMaterial(`bin-${part.binId}`, scene);
-        material.diffuseColor = Color3.FromHexString(binColor(part.binId));
+        material = new StandardMaterial(binKey, scene);
+        material.diffuseColor = Color3.FromHexString(binColor(binKey));
         material.specularColor = new Color3(0.15, 0.15, 0.15);
-        materials.set(part.binId, material);
+        materials.set(binKey, material);
       }
-      const mesh = new Mesh(part.id, scene);
+      const mesh = new Mesh(`${binKey}-part-${partIndex + 1}`, scene);
       const vertexData = new VertexData();
+      const vertexCount = part.triangles.length / 3;
+      const indices = Uint32Array.from({ length: vertexCount }, (_, index) => index);
       const normals: number[] = [];
-      VertexData.ComputeNormals(part.mesh.positions, part.mesh.indices, normals);
-      vertexData.positions = part.mesh.positions;
-      vertexData.indices = part.mesh.indices;
+      VertexData.ComputeNormals(part.triangles, indices, normals);
+      vertexData.positions = part.triangles;
+      vertexData.indices = indices;
       vertexData.normals = normals;
       vertexData.applyToMesh(mesh);
       mesh.material = material;
       mesh.parent = root;
       mesh.position.set(
-        part.layoutPosition.x + part.previewOffset.x,
-        part.layoutPosition.y + part.previewOffset.y,
+        part.previewOffset.x,
+        part.previewOffset.y,
         0,
       );
       return mesh;
@@ -189,6 +192,8 @@ export function BabylonViewer({ parts, error }: Props) {
     <div
       className="viewer"
       data-part-count={parts.length}
+      data-coordinate-orientation="editor-row-down"
+      data-mesh-topology="flat-triangle-soup"
       data-preview-offsets={parts.map((part) =>
         `${part.previewOffset.x.toFixed(2)},${part.previewOffset.y.toFixed(2)}`).join(';')}
     >

@@ -26,7 +26,11 @@ export default function App() {
           <Text size="sm" fw={600} c="bright" lts="0.02em">
             gridfinity-expanded
           </Text>
-          <ExportMenu parts={parts} generating={generating} />
+          <ExportMenu
+            parts={parts}
+            binCount={design.bins.length}
+            generating={generating}
+          />
         </Group>
       </AppShell.Header>
       <AppShell.Navbar className="app-panel">

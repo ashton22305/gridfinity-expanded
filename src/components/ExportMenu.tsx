@@ -1,28 +1,54 @@
 import { Button, Menu } from '@mantine/core';
-import { downloadStl } from '../lib/export/stl';
+import { useMemo } from 'react';
+import { downloadStl, partFilename } from '../lib/export/stl';
 import type { GeneratedPart } from '../lib/types';
 
 interface Props {
   parts: GeneratedPart[];
+  binCount: number;
   generating: boolean;
+}
+
+interface NamedPart extends GeneratedPart {
+  filename: string;
 }
 
 const DOWNLOAD_SPACING_MS = 300;
 
-export function ExportMenu({ parts, generating }: Props) {
-  const disabled = generating || parts.length === 0;
+export function ExportMenu({ parts, binCount, generating }: Props) {
+  const namedParts = useMemo<NamedPart[]>(() => {
+    const partCounts = new Map<number, number>();
+    for (const part of parts) {
+      partCounts.set(part.binIndex, (partCounts.get(part.binIndex) ?? 0) + 1);
+    }
+    const partIndices = new Map<number, number>();
+    return parts.map((part) => {
+      const partIndex = partIndices.get(part.binIndex) ?? 0;
+      partIndices.set(part.binIndex, partIndex + 1);
+      return {
+        ...part,
+        filename: partFilename(
+          part.binIndex,
+          binCount,
+          partIndex,
+          partCounts.get(part.binIndex)!,
+        ),
+      };
+    });
+  }, [binCount, parts]);
+  const disabled = generating || namedParts.length === 0;
 
   function downloadAll() {
-    parts.forEach((part, index) => {
-      setTimeout(() => downloadStl(part.mesh, part.filename), index * DOWNLOAD_SPACING_MS);
+    namedParts.forEach((part, index) => {
+      setTimeout(() => downloadStl(part.triangles, part.filename), index * DOWNLOAD_SPACING_MS);
     });
   }
 
-  if (parts.length <= 1) {
+  if (namedParts.length <= 1) {
     return (
       <Button
         disabled={disabled}
-        onClick={() => parts[0] && downloadStl(parts[0].mesh, parts[0].filename)}
+        onClick={() => namedParts[0] && downloadStl(namedParts[0].triangles, namedParts[0].filename)}
         title={disabled ? 'Waiting for geometry…' : 'Download STL file'}
       >
         Export STL
@@ -34,16 +60,19 @@ export function ExportMenu({ parts, generating }: Props) {
     <Menu>
       <Menu.Target>
         <Button disabled={disabled} rightSection="▾">
-          Export STL ({parts.length} parts)
+          Export STL ({namedParts.length} parts)
         </Button>
       </Menu.Target>
       <Menu.Dropdown>
         <Menu.Item fw={600} onClick={downloadAll}>
-          Download all ({parts.length})
+          Download all ({namedParts.length})
         </Menu.Item>
         <Menu.Divider />
-        {parts.map((part) => (
-          <Menu.Item key={part.id} onClick={() => downloadStl(part.mesh, part.filename)}>
+        {namedParts.map((part, index) => (
+          <Menu.Item
+            key={`${part.binIndex}:${index}`}
+            onClick={() => downloadStl(part.triangles, part.filename)}
+          >
             {part.filename}
           </Menu.Item>
         ))}

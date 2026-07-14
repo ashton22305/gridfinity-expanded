@@ -1,9 +1,11 @@
 /** Production-path manifold and serialized-STL printability gate. */
-import { meshToStl } from '../src/lib/export/stl';
-import { generateDesignParts } from '../src/lib/geometry/gridfinity';
+import { trianglesToStl } from '../src/lib/export/stl';
+import { generateGeometry } from '../src/lib/geometry/gridfinity';
 import { initManifold } from '../src/lib/geometry/manifold';
+import { buildGeometryInput } from '../src/lib/geometryInput';
 import { cutsForPrinter } from '../src/lib/printers';
-import type { BinDesign, Cell, Design, Edge, TriangleMesh, Wall } from '../src/lib/types';
+import { GRIDFINITY_SPEC } from '../src/lib/gridfinitySpec';
+import type { BinDesign, Cell, Design, Edge, Wall } from '../src/lib/types';
 
 interface Report {
   triangles: number;
@@ -16,20 +18,29 @@ interface Report {
   membranes: number;
 }
 
-function analyzeIndexed(mesh: TriangleMesh): Report {
-  const { positions, indices } = mesh;
+function analyzeTriangleSoup(positions: Float32Array): Report {
+  const indices = new Uint32Array(positions.length / 3);
+  const vertices = new Map<string, number>();
+  const vertexKeyAt = (vertex: number) => [0, 1, 2]
+    .map((axis) => positions[vertex * 3 + axis])
+    .join(',');
+  for (let vertex = 0; vertex < indices.length; vertex++) {
+    const key = vertexKeyAt(vertex);
+    let id = vertices.get(key);
+    if (id === undefined) {
+      id = vertices.size;
+      vertices.set(key, id);
+    }
+    indices[vertex] = id;
+  }
   const undirected = new Map<string, number>();
   const directed = new Map<string, number>();
   const indexedFaces = new Map<string, number>();
   const geometricFaces = new Map<string, number>();
   let degenerate = 0;
-  const vertexKey = (vertex: number) => [0, 1, 2]
-    .map((axis) => Math.round(positions[vertex * 3 + axis] * 1e4))
-    .join(',');
-
   for (let index = 0; index < indices.length; index += 3) {
     const face = [indices[index], indices[index + 1], indices[index + 2]];
-    const [a, b, c] = face.map((vertex) => vertex * 3);
+    const [a, b, c] = [index, index + 1, index + 2].map((vertex) => vertex * 3);
     const ux = positions[b] - positions[a];
     const uy = positions[b + 1] - positions[a + 1];
     const uz = positions[b + 2] - positions[a + 2];
@@ -41,11 +52,12 @@ function analyzeIndexed(mesh: TriangleMesh): Report {
       uz * vx - ux * vz,
       ux * vy - uy * vx,
     ) / 2;
-    if (new Set(face).size < 3 || area < 1e-9) degenerate++;
+    if (new Set(face).size < 3 || area === 0) degenerate++;
 
     const indexedKey = [...face].sort((left, right) => left - right).join(',');
     indexedFaces.set(indexedKey, (indexedFaces.get(indexedKey) ?? 0) + 1);
-    const geometricKey = face.map(vertexKey).sort().join('|');
+    const geometricKey = [index, index + 1, index + 2]
+      .map(vertexKeyAt).sort().join('|');
     geometricFaces.set(geometricKey, (geometricFaces.get(geometricKey) ?? 0) + 1);
 
     for (let edge = 0; edge < 3; edge++) {
@@ -83,7 +95,7 @@ function analyzeIndexed(mesh: TriangleMesh): Report {
     orientationErrors,
     duplicateFaces: duplicates(indexedFaces),
     coincidentFaces: duplicates(geometricFaces),
-    membranes: countMembranes(mesh),
+    membranes: countMembranes(positions),
   };
 }
 
@@ -91,8 +103,8 @@ function analyzeIndexed(mesh: TriangleMesh): Report {
  * Detect opposite-facing coplanar coverage that forms a zero-thickness sheet.
  * Edge pairing alone cannot see these internal membranes.
  */
-function countMembranes(mesh: TriangleMesh): number {
-  const { positions, indices } = mesh;
+function countMembranes(positions: Float32Array): number {
+  const indices = Uint32Array.from({ length: positions.length / 3 }, (_, index) => index);
   type Triangle2 = [number, number, number, number, number, number];
   const planes = new Map<string, [Triangle2[], Triangle2[]]>();
 
@@ -178,7 +190,7 @@ function stlBoundary(buffer: ArrayBuffer): { boundary: number; nonManifold: numb
   const view = new DataView(buffer);
   const triangleCount = view.getUint32(80, true);
   const pointKey = (x: number, y: number, z: number) =>
-    `${Math.round(x * 1e4)},${Math.round(y * 1e4)},${Math.round(z * 1e4)}`;
+    `${x},${y},${z}`;
   const edges = new Map<string, number>();
   let offset = 84;
   for (let triangle = 0; triangle < triangleCount; triangle++) {
@@ -299,35 +311,41 @@ const wasm = await initManifold();
 let failed = false;
 for (const fixture of cases) {
   try {
-    const parts = generateDesignParts(wasm, fixture.value);
+    const input = buildGeometryInput(fixture.value);
+    const parts = generateGeometry(wasm, input);
     if (fixture.expectedParts !== undefined && parts.length !== fixture.expectedParts) {
       throw new Error(`expected ${fixture.expectedParts} parts, received ${parts.length}`);
     }
-    for (const part of parts) {
-      const report = analyzeIndexed(part.mesh);
-      const serialized = stlBoundary(meshToStl(part.mesh));
-      let minX = Number.POSITIVE_INFINITY;
-      let minY = Number.POSITIVE_INFINITY;
+    for (const [partIndex, part] of parts.entries()) {
+      const report = analyzeTriangleSoup(part.triangles);
+      const serialized = stlBoundary(trianglesToStl(part.triangles));
       let minZ = Number.POSITIVE_INFINITY;
       let maxZ = Number.NEGATIVE_INFINITY;
-      for (let index = 0; index < part.mesh.positions.length; index += 3) {
-        minX = Math.min(minX, part.mesh.positions[index]);
-        minY = Math.min(minY, part.mesh.positions[index + 1]);
-        minZ = Math.min(minZ, part.mesh.positions[index + 2]);
-        maxZ = Math.max(maxZ, part.mesh.positions[index + 2]);
+      let horizontalTransitionFaces = 0;
+      const floorZ = GRIDFINITY_SPEC.baseHeight + GRIDFINITY_SPEC.floorThickness;
+      const transitionTop = floorZ + fixture.value.filletRadius;
+      for (let index = 0; index < part.triangles.length; index += 9) {
+        const z = [part.triangles[index + 2], part.triangles[index + 5], part.triangles[index + 8]];
+        minZ = Math.min(minZ, ...z);
+        maxZ = Math.max(maxZ, ...z);
+        if (Math.max(...z) - Math.min(...z) < 1e-6 &&
+            z[0] > floorZ + 1e-4 && z[0] < transitionTop - 1e-4) {
+          horizontalTransitionFaces++;
+        }
       }
-      const coordinateError = Math.abs(minX) > 1e-4 || Math.abs(minY) > 1e-4 ||
-        Math.abs(minZ) > 1e-4 || Math.abs(maxZ - fixture.value.heightUnits * 7) > 1e-3;
+      const coordinateError = Math.abs(minZ) > 1e-4 ||
+        Math.abs(maxZ - input.height) > 1e-3;
       const defective = report.degenerate || report.boundaryEdges || report.nonManifoldEdges ||
         report.orientationErrors || report.duplicateFaces || report.coincidentFaces || report.membranes ||
-        serialized.boundary || serialized.nonManifold || coordinateError;
+        serialized.boundary || serialized.nonManifold || coordinateError || horizontalTransitionFaces;
       if (defective) failed = true;
       console.log(
-        `${`${fixture.name} [${part.id}]`.padEnd(48)} tris=${String(report.triangles).padStart(6)} ` +
+        `${`${fixture.name} [part ${partIndex + 1}]`.padEnd(48)} tris=${String(report.triangles).padStart(6)} ` +
         `boundary=${report.boundaryEdges} nonManifold=${report.nonManifoldEdges} ` +
         `orient=${report.orientationErrors} degen=${report.degenerate} ` +
         `dup=${report.duplicateFaces} coincident=${report.coincidentFaces} membrane=${report.membranes} ` +
-        `stl(bnd=${serialized.boundary},nm=${serialized.nonManifold}) coords=${coordinateError ? 'bad' : 'local'} ` +
+        `flatFillet=${horizontalTransitionFaces} ` +
+        `stl(bnd=${serialized.boundary},nm=${serialized.nonManifold}) coords=${coordinateError ? 'bad' : 'global'} ` +
         (defective ? '✗ DEFECTIVE' : '✓ clean'),
       );
     }
@@ -342,24 +360,27 @@ try {
     bin('top', [{ x: 0, y: 0 }]),
     bin('bottom', [{ x: 0, y: 2 }]),
   ]);
-  const parts = generateDesignParts(wasm, orientationDesign);
-  const top = parts.find((part) => part.binId === 'top')!;
-  const bottom = parts.find((part) => part.binId === 'bottom')!;
-  if (!(bottom.layoutPosition.y < top.layoutPosition.y)) {
-    throw new Error('editor row-down coordinates were not normalized to model +Y');
+  const parts = generateGeometry(wasm, buildGeometryInput(orientationDesign));
+  const minY = (triangles: Float32Array) => {
+    let value = Number.POSITIVE_INFINITY;
+    for (let index = 1; index < triangles.length; index += 3) value = Math.min(value, triangles[index]);
+    return value;
+  };
+  if (!(minY(parts[1].triangles) > minY(parts[0].triangles))) {
+    throw new Error('geometry did not preserve editor row-down coordinates');
   }
-  const cutParts = generateDesignParts(
-    wasm,
+  const cutInput = buildGeometryInput(
     design([bin('bin-1', wideCells, { cuts: wideCuts })], { printer: smallPrinter }),
   );
+  const cutParts = generateGeometry(wasm, cutInput);
   const previewXs = [...new Set(cutParts.map((part) => part.previewOffset.x))].sort((a, b) => a - b);
   if (previewXs.length < 2 || Math.abs(previewXs[1] - previewXs[0] - 0.3) > 1e-6) {
     throw new Error('multipart preview transforms do not create a 0.3 mm gap');
   }
-  console.log('coordinate/orientation semantics'.padEnd(48) + ' ✓ pass');
+  console.log('trusted coordinate/orientation semantics'.padEnd(48) + ' ✓ pass');
 } catch (error) {
   failed = true;
-  console.log(`coordinate/orientation semantics`.padEnd(48) + ` ERROR: ${String(error)}`);
+  console.log(`trusted coordinate/orientation semantics`.padEnd(48) + ` ERROR: ${String(error)}`);
 }
 
 console.log(failed

@@ -1,27 +1,21 @@
 # Babylon Viewer
 
-The normative preview/export relationship and coordinate rules live in [`geometry-pipeline.md`](./geometry-pipeline.md). This document records the viewer-specific implementation.
+The normative preview/export relationship and coordinate rules live in [`geometry-pipeline.md`](./geometry-pipeline.md). This document records viewer-specific behavior.
 
-## Input
+## Input and meshes
 
-`BabylonViewer` receives the same `GeneratedPart[]` that `ExportMenu` serializes. Each part contains final local-print `positions` and `indices`, its model-space `layoutPosition`, and a preview-only `previewOffset`.
+`BabylonViewer` receives the same `GeneratedPart[]` that `ExportMenu` serializes. Each part contains a `binIndex`, a global-coordinate `Float32Array` triangle soup, and a preview-only offset.
 
-There is no preview STL, `Blob`, object URL, `SceneLoader`, STL loader, asynchronous parse, or loader race. On a new part array, the viewer synchronously replaces its Babylon meshes and applies `VertexData` directly. Normals are computed from the indexed winding for lighting.
+There is no preview STL, loader, vertex welding, smoothing, or vertex splitting. The viewer creates sequential indices for the soup, computes normals, and applies `VertexData` directly. Since every triangle owns three vertices, its normal remains independent and the preview is flat-faceted.
 
-## Scene coordinates
+## Coordinates
 
-The generated meshes are right-handed and Z-up. The scene is right-handed. All model meshes share one root whose only coordinate transform is `rotation.x = -Math.PI / 2`, mapping model Z to Babylon Y. The viewer must not mirror X or Y; row-down editor coordinates were already normalized before geometry generation.
+Geometry preserves the editor's row-down X/Y values and uses Z-up. The right-handed Babylon scene rotates the shared root by `-Math.PI / 2` to display Z-up data in Y-up space. The default camera orbits from the opposite Z side so editor rows retain their visible direction without mirroring geometry.
 
-Every mesh is placed at:
-
-```text
-layoutPosition + previewOffset
-```
-
-The 0.3 mm multipart gap therefore exists only in transforms. Export never observes it.
+Meshes stay at their generated coordinates. Only `previewOffset` is applied as a mesh transform, creating the 0.3 mm multipart gap without changing exported triangles.
 
 ## Lifecycle and camera
 
-The engine, scene, root, camera, and lights are created once. A `ResizeObserver` keeps the canvas matched to resizable side panels. New part arrays dispose the previous meshes/materials, construct replacements, and refit the camera while preserving the user's orbit angle. “Reset view” also restores the default orbit.
+The engine, scene, root, camera, and lights are created once. A `ResizeObserver` keeps the canvas matched to the resizable side panels. New part arrays dispose old meshes and materials, construct replacements, and refit the camera while preserving the user's orbit. “Reset view” restores the default orbit.
 
-The generic worker failure message overlays the canvas while the last successful part array remains available in the hook. Viewer code does not classify geometry or input errors.
+The generic worker failure message overlays the canvas while the last successful parts remain available. Viewer code does not classify geometry or input errors.

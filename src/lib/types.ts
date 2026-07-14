@@ -65,20 +65,26 @@ export interface Design {
   printer: PrinterSettings;
 }
 
-/** Indexed triangles in final, part-local print coordinates. */
-export interface TriangleMesh {
-  positions: Float32Array;
-  indices: Uint32Array;
+/** Trusted, generation-ready input sent across the worker boundary. */
+export interface GeometryInput {
+  height: number;
+  perimeterThickness: number;
+  filletRadius: number;
+  fasteners: FastenerSettings;
+  bins: GeometryBin[];
+}
+
+export interface GeometryBin {
+  cells: Cell[];
+  openings: Edge[];
+  walls: Wall[];
+  parts: Cell[][];
+  previewOffsets: Point2[];
 }
 
 export interface GeneratedPart {
-  id: string;
-  binId: string;
-  filename: string;
-  mesh: TriangleMesh;
-  /** Model-space placement that restores the design layout for preview. */
-  layoutPosition: Point2;
-  /** Preview-only transform; never applied to the printable mesh. */
+  binIndex: number;
+  triangles: Float32Array;
   previewOffset: Point2;
 }
 
@@ -90,10 +96,10 @@ export interface BedFitResult {
 }
 
 export interface GenerateGeometryRequest {
-  requestId: number;
-  design: Design;
+  revision: number;
+  input: GeometryInput;
 }
 
 export type GenerateGeometryResponse =
-  | { ok: true; requestId: number; parts: GeneratedPart[] }
-  | { ok: false; requestId: number; error: string };
+  | { ok: true; revision: number; parts: GeneratedPart[] }
+  | { ok: false; revision: number; error: string };
