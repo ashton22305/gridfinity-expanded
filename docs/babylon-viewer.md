@@ -6,7 +6,7 @@ The normative preview/export relationship and coordinate rules live in [`geometr
 
 `BabylonViewer` receives the same `GeneratedPart[]` that `ExportMenu` serializes. Each part contains a `binIndex`, a global-coordinate `Float32Array` triangle soup, and a preview-only offset.
 
-There is no preview STL, loader, vertex welding, smoothing, or vertex splitting. The viewer creates sequential indices for the soup, computes normals, and applies `VertexData` directly. Since every triangle owns three vertices, its normal remains independent and the preview is flat-faceted.
+There is no preview STL, loader, vertex welding, smoothing, or vertex splitting. The viewer creates sequential indices for the soup, computes normals, and applies `VertexData` directly. Since every triangle owns three vertices, its normal remains independent and the preview is flat-faceted. Manifold emits outward counter-clockwise winding, so the shared Babylon materials explicitly use counter-clockwise face orientation in the right-handed scene; back-face culling remains enabled and hides only the solid interior.
 
 ## Coordinates
 

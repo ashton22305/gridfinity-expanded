@@ -10,6 +10,7 @@ import {
   EasingFunction,
   Engine,
   HemisphericLight,
+  Material,
   Mesh,
   Scene,
   StandardMaterial,
@@ -26,6 +27,7 @@ const DEFAULT_RADIUS = 140;
 const FIT_MARGIN = 1.08;
 const ANIMATION_FPS = 60;
 const ANIMATION_FRAMES = 36;
+const FACE_ORIENTATION = 'counter-clockwise';
 
 interface Props {
   parts: GeneratedPart[];
@@ -163,6 +165,7 @@ export function BabylonViewer({ parts, error }: Props) {
         material = new StandardMaterial(binKey, scene);
         material.diffuseColor = Color3.FromHexString(binColor(binKey));
         material.specularColor = new Color3(0.15, 0.15, 0.15);
+        material.sideOrientation = Material.CounterClockWiseSideOrientation;
         materials.set(binKey, material);
       }
       const mesh = new Mesh(`${binKey}-part-${partIndex + 1}`, scene);
@@ -193,6 +196,7 @@ export function BabylonViewer({ parts, error }: Props) {
       className="viewer"
       data-part-count={parts.length}
       data-coordinate-orientation="editor-row-down"
+      data-face-orientation={FACE_ORIENTATION}
       data-mesh-topology="flat-triangle-soup"
       data-preview-offsets={parts.map((part) =>
         `${part.previewOffset.x.toFixed(2)},${part.previewOffset.y.toFixed(2)}`).join(';')}
