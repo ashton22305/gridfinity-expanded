@@ -75,6 +75,7 @@ export interface GeometryInput {
 }
 
 export interface GeometryBin {
+  id: string;
   cells: Cell[];
   openings: Edge[];
   walls: Wall[];
@@ -83,7 +84,7 @@ export interface GeometryBin {
 }
 
 export interface GeneratedPart {
-  binIndex: number;
+  binId: string;
   triangles: Float32Array;
   previewOffset: Point2;
 }

@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { partFilename, trianglesToStl } from './stl';
 
 describe('STL export ownership', () => {
-  it('derives filenames from bin and part indices', () => {
-    expect(partFilename(0, 1, 0, 1)).toBe('gridfinity-bin.stl');
-    expect(partFilename(1, 3, 2, 4)).toBe('gridfinity-bin-2-part-3-of-4.stl');
+  it('derives filenames from stable bin ids and part indices', () => {
+    expect(partFilename('bin-1', 1, 0, 1)).toBe('gridfinity-bin.stl');
+    expect(partFilename('bin-2', 3, 2, 4)).toBe('gridfinity-bin-2-part-3-of-4.stl');
   });
 
   it('serializes triangle soup without indexing or coordinate transforms', () => {

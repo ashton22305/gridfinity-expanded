@@ -5,6 +5,7 @@ import {
   GRIDFINITY_SPEC,
   IMPLEMENTATION_ALLOWANCES,
   gridfinityHeight,
+  maximumFilletRadius,
 } from './gridfinitySpec';
 
 describe('Gridfinity specification', () => {
@@ -26,7 +27,12 @@ describe('Gridfinity specification', () => {
   it('keeps product defaults and implementation allowances outside the spec', () => {
     expect(DESIGN_DEFAULTS.filletRadius).toBe(2.8);
     expect(DESIGN_DEFAULTS.perimeterThickness).toBe(1.2);
-    expect(IMPLEMENTATION_ALLOWANCES.csgOverlap).toBe(0.01);
     expect(IMPLEMENTATION_ALLOWANCES.multipartPreviewGap).toBe(0.3);
+  });
+
+  it('limits the fillet radius to the cavity depth minus a straight wall', () => {
+    expect(maximumFilletRadius(14)).toBeCloseTo(5.6);
+    expect(maximumFilletRadius(21)).toBeCloseTo(12.6);
+    expect(maximumFilletRadius(8)).toBe(0);
   });
 });

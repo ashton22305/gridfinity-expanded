@@ -57,9 +57,7 @@ export const DESIGN_DEFAULTS = {
 /** Planning, manufacturing, and CSG allowances are intentionally non-normative. */
 export const IMPLEMENTATION_ALLOWANCES = {
   bedClearancePerSide: 5,
-  csgOverlap: 0.01,
-  wallFloorEmbed: 0.5,
-  meshWeldStep: 0.001,
+  minimumStraightCavityWall: 0.2,
   multipartPreviewGap: 0.3,
 } as const;
 
@@ -83,4 +81,10 @@ export const GRIDFINITY_SOURCES = [
 
 export function gridfinityHeight(heightUnits: number): number {
   return heightUnits * GRIDFINITY_SPEC.heightUnit;
+}
+
+/** Largest floor fillet that still leaves a straight cavity wall at this bin height. */
+export function maximumFilletRadius(height: number): number {
+  const cavityDepth = height - GRIDFINITY_SPEC.baseHeight - GRIDFINITY_SPEC.floorThickness;
+  return Math.max(0, cavityDepth - IMPLEMENTATION_ALLOWANCES.minimumStraightCavityWall);
 }

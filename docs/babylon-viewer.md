@@ -4,7 +4,7 @@ The normative preview/export relationship and coordinate rules live in [`geometr
 
 ## Input and meshes
 
-`BabylonViewer` receives the same `GeneratedPart[]` that `ExportMenu` serializes. Each part contains a `binIndex`, a global-coordinate `Float32Array` triangle soup, and a preview-only offset.
+`BabylonViewer` receives the same `GeneratedPart[]` that `ExportMenu` serializes. Each part contains the stable `binId` shared with the 2D editors, a global-coordinate `Float32Array` triangle soup, and a preview-only offset. Materials and palette colors are keyed by that id, so the 3D preview always matches the editor color for the same bin even after deletions cause ids and array positions to diverge.
 
 There is no preview STL, loader, vertex welding, smoothing, or vertex splitting. The viewer creates sequential indices for the soup, computes normals, and applies `VertexData` directly. Since every triangle owns three vertices, its normal remains independent and the preview is flat-faceted. Manifold emits outward counter-clockwise winding, so the shared Babylon materials explicitly use counter-clockwise face orientation in the right-handed scene; back-face culling remains enabled and hides only the solid interior.
 

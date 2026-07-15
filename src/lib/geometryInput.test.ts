@@ -32,6 +32,15 @@ describe('trusted geometry input', () => {
     ]);
     expect(input).not.toHaveProperty('printer');
     expect(input.bins[0]).not.toHaveProperty('cuts');
-    expect(input.bins[0]).not.toHaveProperty('id');
+  });
+
+  it('forwards the stable bin id for part identity', () => {
+    expect(buildGeometryInput(design).bins[0].id).toBe('editor-only-id');
+  });
+
+  it('clamps the fillet radius so the cavity keeps a straight wall', () => {
+    const shallow = { ...design, heightUnits: 2, filletRadius: 8 };
+    expect(buildGeometryInput(shallow).filletRadius).toBeCloseTo(5.6);
+    expect(buildGeometryInput(design).filletRadius).toBe(2.8);
   });
 });

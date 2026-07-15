@@ -17,21 +17,21 @@ const DOWNLOAD_SPACING_MS = 300;
 
 export function ExportMenu({ parts, binCount, generating }: Props) {
   const namedParts = useMemo<NamedPart[]>(() => {
-    const partCounts = new Map<number, number>();
+    const partCounts = new Map<string, number>();
     for (const part of parts) {
-      partCounts.set(part.binIndex, (partCounts.get(part.binIndex) ?? 0) + 1);
+      partCounts.set(part.binId, (partCounts.get(part.binId) ?? 0) + 1);
     }
-    const partIndices = new Map<number, number>();
+    const partIndices = new Map<string, number>();
     return parts.map((part) => {
-      const partIndex = partIndices.get(part.binIndex) ?? 0;
-      partIndices.set(part.binIndex, partIndex + 1);
+      const partIndex = partIndices.get(part.binId) ?? 0;
+      partIndices.set(part.binId, partIndex + 1);
       return {
         ...part,
         filename: partFilename(
-          part.binIndex,
+          part.binId,
           binCount,
           partIndex,
-          partCounts.get(part.binIndex)!,
+          partCounts.get(part.binId)!,
         ),
       };
     });
@@ -70,7 +70,7 @@ export function ExportMenu({ parts, binCount, generating }: Props) {
         <Menu.Divider />
         {namedParts.map((part, index) => (
           <Menu.Item
-            key={`${part.binIndex}:${index}`}
+            key={`${part.binId}:${index}`}
             onClick={() => downloadStl(part.triangles, part.filename)}
           >
             {part.filename}

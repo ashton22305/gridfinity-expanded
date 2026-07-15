@@ -292,6 +292,10 @@ const cases: { name: string; value: Design; expectedParts?: number }[] = [
   }) },
   { name: 'zero shared fillet', value: design([bin('bin-1', irregular)], { filletRadius: 0 }) },
   { name: 'large shared fillet', value: design([bin('bin-1', ring)], { filletRadius: 5 }) },
+  { name: 'minimum height, slider-max fillet', value: design([bin('bin-1', uShape)], {
+    heightUnits: 2,
+    filletRadius: 8,
+  }) },
   { name: 'multiple bins', value: design([
     bin('bin-1', rectangle(1, 2)),
     bin('bin-2', rectangle(1, 2, 2, 0)),
@@ -323,19 +327,34 @@ for (const fixture of cases) {
       let maxZ = Number.NEGATIVE_INFINITY;
       let horizontalTransitionFaces = 0;
       const floorZ = GRIDFINITY_SPEC.baseHeight + GRIDFINITY_SPEC.floorThickness;
-      const transitionTop = floorZ + fixture.value.filletRadius;
+      const transitionTop = floorZ + input.filletRadius;
       for (let index = 0; index < part.triangles.length; index += 9) {
         const z = [part.triangles[index + 2], part.triangles[index + 5], part.triangles[index + 8]];
         minZ = Math.min(minZ, ...z);
         maxZ = Math.max(maxZ, ...z);
-        if (Math.max(...z) - Math.min(...z) < 1e-6 &&
-            z[0] > floorZ + 1e-4 && z[0] < transitionTop - 1e-4) {
+        const zMid = (z[0] + z[1] + z[2]) / 3;
+        if (zMid <= floorZ + 1e-4 || zMid >= transitionTop - 1e-4) continue;
+        const [a, b, c] = [index, index + 3, index + 6];
+        const ux = part.triangles[b] - part.triangles[a];
+        const uy = part.triangles[b + 1] - part.triangles[a + 1];
+        const uz = part.triangles[b + 2] - part.triangles[a + 2];
+        const vx = part.triangles[c] - part.triangles[a];
+        const vy = part.triangles[c + 1] - part.triangles[a + 1];
+        const vz = part.triangles[c + 2] - part.triangles[a + 2];
+        const nx = uy * vz - uz * vy;
+        const ny = uz * vx - ux * vz;
+        const nz = ux * vy - uy * vx;
+        const normalLength = Math.hypot(nx, ny, nz);
+        // Any near-horizontal facet inside the transition band is a terrace step;
+        // a smooth 32-segment sweep never tilts its lowest band this close to flat.
+        if (normalLength > 1e-9 && Math.abs(nz) / normalLength > 0.9999) {
           horizontalTransitionFaces++;
         }
       }
       const coordinateError = Math.abs(minZ) > 1e-4 ||
         Math.abs(maxZ - input.height) > 1e-3;
-      const defective = report.degenerate || report.boundaryEdges || report.nonManifoldEdges ||
+      const defective = report.triangles === 0 ||
+        report.degenerate || report.boundaryEdges || report.nonManifoldEdges ||
         report.orientationErrors || report.duplicateFaces || report.coincidentFaces || report.membranes ||
         serialized.boundary || serialized.nonManifold || coordinateError || horizontalTransitionFaces;
       if (defective) failed = true;

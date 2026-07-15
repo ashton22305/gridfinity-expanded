@@ -9,12 +9,12 @@ export function downloadBuffer(buffer: ArrayBuffer, filename: string, mimeType: 
 }
 
 export function partFilename(
-  binIndex: number,
+  binId: string,
   binCount: number,
   partIndex: number,
   partCount: number,
 ): string {
-  const stem = binCount === 1 ? 'gridfinity-bin' : `gridfinity-bin-${binIndex + 1}`;
+  const stem = binCount === 1 ? 'gridfinity-bin' : `gridfinity-${binId}`;
   return partCount === 1
     ? `${stem}.stl`
     : `${stem}-part-${partIndex + 1}-of-${partCount}.stl`;

@@ -159,7 +159,7 @@ export function BabylonViewer({ parts, error }: Props) {
     currentRef.current.materials.forEach((material) => material.dispose());
     const materials = new Map<string, StandardMaterial>();
     const meshes = parts.map((part, partIndex) => {
-      const binKey = `bin-${part.binIndex + 1}`;
+      const binKey = part.binId;
       let material = materials.get(binKey);
       if (!material) {
         material = new StandardMaterial(binKey, scene);

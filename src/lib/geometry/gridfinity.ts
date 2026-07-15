@@ -16,7 +16,8 @@ import { manifoldTriangles } from './manifold';
 const PITCH = GRIDFINITY_SPEC.gridPitch;
 const BASE = GRIDFINITY_SPEC.baseProfile;
 const FILLET_SEGMENTS = 32;
-const MINKOWSKI_SEED_THICKNESS = 0.1;
+/** Collapses sub-micron boolean slivers; far below visible or sliceable size. */
+const SLIVER_EPSILON = 1e-3;
 
 function roundedRect(
   wasm: ManifoldToplevel,
@@ -142,12 +143,9 @@ function roundedCavity(
   const upperZ = floorZ + radius;
   const seed = footprint
     .offset(-radius, 'Round', 2, FILLET_SEGMENTS)
-    .extrude(height - upperZ + MINKOWSKI_SEED_THICKNESS)
+    .extrude(height - upperZ)
     .translate([0, 0, upperZ]);
-  const cavity = seed
-    .minkowskiSum(wasm.Manifold.sphere(radius, FILLET_SEGMENTS))
-    .setTolerance(MINKOWSKI_SEED_THICKNESS);
-  return cavity.translate([0, 0, floorZ - cavity.boundingBox().min[2]]);
+  return seed.minkowskiSum(wasm.Manifold.sphere(radius, FILLET_SEGMENTS));
 }
 
 const HARDWARE_OFFSET = GRIDFINITY_SPEC.hardware.centerOffset;
@@ -217,12 +215,13 @@ function buildBinSolid(
   return solid;
 }
 
+/** Vertically overshoot the solid so cutter planes never coincide with its faces. */
 function partCutter(
   wasm: ManifoldToplevel,
   cells: Cell[],
   height: number,
 ): Manifold {
-  return cellFootprint(wasm, cells).extrude(height);
+  return cellFootprint(wasm, cells).extrude(height + 2).translate([0, 0, -1]);
 }
 
 /** Build finished solids from trusted input and return their native triangle soups. */
@@ -232,15 +231,18 @@ export function generateGeometry(
 ): GeneratedPart[] {
   const generated: GeneratedPart[] = [];
   const base = canonicalBase(wasm);
-  input.bins.forEach((bin, binIndex) => {
+  for (const bin of input.bins) {
     const solid = buildBinSolid(wasm, input, bin, base);
     bin.parts.forEach((cells, partIndex) => {
+      const part = bin.parts.length === 1
+        ? solid
+        : solid.intersect(partCutter(wasm, cells, input.height));
       generated.push({
-        binIndex,
-        triangles: manifoldTriangles(solid.intersect(partCutter(wasm, cells, input.height))),
+        binId: bin.id,
+        triangles: manifoldTriangles(part.simplify(SLIVER_EPSILON)),
         previewOffset: bin.previewOffsets[partIndex],
       });
     });
-  });
+  }
   return generated;
 }

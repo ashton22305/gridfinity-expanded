@@ -1,5 +1,9 @@
 import { Stack } from '@mantine/core';
-import { DESIGN_DEFAULTS, gridfinityHeight } from '../../../lib/gridfinitySpec';
+import {
+  DESIGN_DEFAULTS,
+  gridfinityHeight,
+  maximumFilletRadius,
+} from '../../../lib/gridfinitySpec';
 import { useAppStore } from '../../../store';
 import { SliderField } from '../../ui/SliderField';
 
@@ -8,6 +12,8 @@ export function DimensionsTab() {
   const setHeightUnits = useAppStore((state) => state.setHeightUnits);
   const setPerimeterThickness = useAppStore((state) => state.setPerimeterThickness);
   const setFilletRadius = useAppStore((state) => state.setFilletRadius);
+  const filletMax = Math.min(8, maximumFilletRadius(gridfinityHeight(design.heightUnits)));
+  const filletValue = Math.min(design.filletRadius, filletMax);
 
   return (
     <Stack gap="lg">
@@ -35,11 +41,11 @@ export function DimensionsTab() {
       <SliderField
         label="Shared fillet"
         min={0}
-        max={8}
+        max={filletMax}
         step={0.2}
-        value={design.filletRadius}
+        value={filletValue}
         onChange={setFilletRadius}
-        display={design.filletRadius.toFixed(1)}
+        display={filletValue.toFixed(1)}
         unit="mm"
         hint="One radius rounds cavity corners and floor-to-wall transitions."
       />
