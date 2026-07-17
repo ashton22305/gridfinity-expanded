@@ -1,4 +1,41 @@
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
+
+async function cacheRecordCount(page: Page): Promise<number> {
+  return page.evaluate(async () => {
+    const databases = await indexedDB.databases();
+    if (!databases.some((database) => database.name === 'gridfinity-geometry-cache')) return 0;
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('gridfinity-geometry-cache');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const count = await new Promise<number>((resolve, reject) => {
+      const request = database.transaction('meshes').objectStore('meshes').count();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    return count;
+  });
+}
+
+async function cacheRecordKeys(page: Page): Promise<IDBValidKey[]> {
+  return page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('gridfinity-geometry-cache');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+      const request = database.transaction('meshes').objectStore('meshes').getAllKeys();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    return keys;
+  });
+}
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -28,22 +65,7 @@ test('reuses cached geometry after reverting parameters and reloading', async ({
   await expect(exportButton).toBeEnabled({ timeout: 30_000 });
   await expect.poll(() => page.evaluate(() =>
     Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(1);
-  await expect.poll(() => page.evaluate(async () => {
-    const databases = await indexedDB.databases();
-    if (!databases.some((database) => database.name === 'gridfinity-geometry-cache')) return 0;
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('gridfinity-geometry-cache');
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    const count = await new Promise<number>((resolve, reject) => {
-      const request = database.transaction('meshes').objectStore('meshes').count();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    database.close();
-    return count;
-  })).toBe(1);
+  await expect.poll(() => cacheRecordCount(page)).toBe(1);
 
   await page.getByRole('button', { name: '+ New' }).click();
   await page.locator('.cell[aria-pressed="false"]').first().click();
@@ -101,6 +123,113 @@ test('renders geometry when IndexedDB is unavailable', async ({ page }) => {
   await expect(page.getByRole('button', { name: /Export STL/ })).toBeEnabled({ timeout: 30_000 });
   expect(await page.evaluate(() =>
     (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests)).toBe(1);
+});
+
+test('recovers cache access and keeps hits when LRU refresh fails', async ({ page }) => {
+  await page.addInitScript(() => {
+    const nativeIndexedDB = window.indexedDB;
+    let indexedDBAccesses = 0;
+    Object.defineProperty(window, 'indexedDB', {
+      configurable: true,
+      get: () => {
+        indexedDBAccesses++;
+        if (indexedDBAccesses === 1) throw new Error('Temporary IndexedDB failure');
+        return nativeIndexedDB;
+      },
+    });
+
+    type CacheTestWindow = typeof window & {
+      __failCacheTouches: boolean;
+      __failedCacheTouches: number;
+      __geometryWorkerRequests: number;
+    };
+    const testWindow = window as CacheTestWindow;
+    Object.defineProperties(window, {
+      __failCacheTouches: { value: false, writable: true },
+      __failedCacheTouches: { value: 0, writable: true },
+      __geometryWorkerRequests: { value: 0, writable: true },
+    });
+
+    const nativePut = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function(value: unknown, key?: IDBValidKey) {
+      if (testWindow.__failCacheTouches) {
+        testWindow.__failedCacheTouches++;
+        throw new DOMException('Cache touch failed', 'QuotaExceededError');
+      }
+      const args = key === undefined ? [value] : [value, key];
+      return Reflect.apply(nativePut, this, args) as IDBRequest<IDBValidKey>;
+    };
+
+    const NativeWorker = window.Worker;
+    window.Worker = class CountingWorker extends NativeWorker {
+      postMessage(message: unknown, options?: StructuredSerializeOptions | Transferable[]) {
+        testWindow.__geometryWorkerRequests++;
+        super.postMessage(message, options as StructuredSerializeOptions);
+      }
+    };
+  });
+  await page.goto('/');
+
+  const exportButton = page.getByRole('button', { name: /Export STL/ });
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests
+  )).toBe(1);
+  await expect.poll(() => cacheRecordCount(page)).toBe(1);
+
+  await page.getByRole('button', { name: 'Cell 1,1' }).click();
+  await expect(page.getByText('3 cells', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests
+  )).toBe(2);
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => cacheRecordCount(page)).toBe(2);
+
+  await page.evaluate(() => {
+    (window as typeof window & { __failCacheTouches: boolean }).__failCacheTouches = true;
+  });
+  await page.getByRole('button', { name: 'Cell 1,1' }).click();
+  await expect(page.getByText('4 cells', { exact: true })).toBeVisible();
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __failedCacheTouches: number }).__failedCacheTouches
+  )).toBeGreaterThan(0);
+  expect(await page.evaluate(() =>
+    (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests)).toBe(2);
+});
+
+test('evicts least-recently-used records over the cache size limit', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: /Export STL/ })).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => cacheRecordCount(page)).toBe(1);
+
+  await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('gridfinity-geometry-cache');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = database.transaction('meshes', 'readwrite');
+    const store = transaction.objectStore('meshes');
+    const pieces = [{
+      triangles: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      cells: [{ x: 0, y: 0 }],
+    }];
+    store.put({ key: 'oldest', pieces, byteSize: 60 * 1024 * 1024, lastAccess: 1 });
+    store.put({ key: 'newer', pieces, byteSize: 60 * 1024 * 1024, lastAccess: 2 });
+    await new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    database.close();
+  });
+
+  await page.getByRole('button', { name: 'Cell 1,1' }).click();
+  await expect(page.getByText('3 cells', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Export STL/ })).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => cacheRecordKeys(page)).not.toContain('oldest');
+  expect(await cacheRecordKeys(page)).toContain('newer');
 });
 
 test('keeps selected-bin painting explicit and exposes the simplified controls', async ({ page }) => {
