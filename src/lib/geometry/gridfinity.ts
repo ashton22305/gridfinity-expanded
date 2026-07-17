@@ -129,6 +129,29 @@ function cavityFootprint(
   return cavity;
 }
 
+function closeReentrantCorners(
+  wasm: ManifoldToplevel,
+  footprint: CrossSection,
+  radius: number,
+): CrossSection {
+  return wasm.CrossSection.union(footprint.decompose().map((region) => {
+    const corners = region.toPolygons().flatMap((polygon) => polygon.filter((point, index) => {
+      const previous = polygon[(index + polygon.length - 1) % polygon.length];
+      const next = polygon[(index + 1) % polygon.length];
+      return (point[0] - previous[0]) * (next[1] - point[1]) -
+        (point[1] - previous[1]) * (next[0] - point[0]) < -1e-9;
+    }));
+    if (corners.length === 0) return region;
+
+    const closed = region
+      .offset(radius, 'Round', 2, FILLET_SEGMENTS)
+      .offset(-radius, 'Round', 2, FILLET_SEGMENTS);
+    const cornerEnvelope = wasm.CrossSection.union(corners.map((corner) =>
+      wasm.CrossSection.circle(radius + SLIVER_EPSILON, FILLET_SEGMENTS).translate(corner)));
+    return region.add(closed.subtract(region).intersect(cornerEnvelope));
+  }));
+}
+
 function roundedCavity(
   wasm: ManifoldToplevel,
   footprint: CrossSection,
@@ -141,7 +164,8 @@ function roundedCavity(
   }
 
   const upperZ = floorZ + radius;
-  const seed = footprint
+  const closedFootprint = closeReentrantCorners(wasm, footprint, radius);
+  const seed = closedFootprint
     .offset(-radius, 'Round', 2, FILLET_SEGMENTS)
     .extrude(height - upperZ)
     .translate([0, 0, upperZ]);
