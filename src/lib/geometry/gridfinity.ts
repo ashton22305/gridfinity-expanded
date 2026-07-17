@@ -99,12 +99,15 @@ function closeReentrantCorners(
       .offset(-radius, 'Round', 2, FILLET_SEGMENTS);
     const cornerEnvelope = wasm.CrossSection.union(corners.map((corner) =>
       wasm.CrossSection.circle(radius + SLIVER_EPSILON, FILLET_SEGMENTS).translate(corner)));
-    return region.add(closed.subtract(region).intersect(cornerEnvelope));
+    return region.add(closed.intersect(cornerEnvelope));
   }));
 }
 
-function outerFootprint(wasm: ManifoldToplevel, cells: Cell[]): CrossSection {
-  const footprint = cellFootprint(wasm, cells)
+function outerFootprint(
+  wasm: ManifoldToplevel,
+  sharedFootprint: CrossSection,
+): CrossSection {
+  const footprint = sharedFootprint
     .offset(
       -(GRIDFINITY_DERIVED.perimeterClearancePerSide + GRIDFINITY_SPEC.outerCornerRadius),
       'Square',
@@ -140,9 +143,10 @@ function wallFootprint(wasm: ManifoldToplevel, wall: Wall): CrossSection {
 function cavityFootprint(
   wasm: ManifoldToplevel,
   bin: BinParameters,
+  sharedFootprint: CrossSection,
   perimeterThickness: number,
 ): CrossSection {
-  let cavity = cellFootprint(wasm, bin.cells).offset(
+  let cavity = sharedFootprint.offset(
     -(GRIDFINITY_DERIVED.perimeterClearancePerSide + perimeterThickness),
     'Miter',
     2,
@@ -231,18 +235,19 @@ function buildBinSolid(
   bin: BinParameters,
   base: Manifold,
 ): Manifold {
+  const footprint = cellFootprint(wasm, bin.cells);
   const bases = bin.cells.map((cell) => base.translate([
     cell.x * PITCH + PITCH / 2,
     cell.y * PITCH + PITCH / 2,
     0,
   ]));
-  const body = outerFootprint(wasm, bin.cells)
+  const body = outerFootprint(wasm, footprint)
     .extrude(bin.height - BASE.height)
     .translate([0, 0, BASE.height]);
   let solid = wasm.Manifold.union([...bases, body]);
   solid = solid.subtract(roundedCavity(
     wasm,
-    cavityFootprint(wasm, bin, bin.perimeterThickness),
+    cavityFootprint(wasm, bin, footprint, bin.perimeterThickness),
     bin.filletRadius,
     bin.height,
   ));
