@@ -72,14 +72,46 @@ function cellFootprint(wasm: ManifoldToplevel, cells: Cell[]): CrossSection {
       .translate([cell.x * PITCH, cell.y * PITCH])));
 }
 
+function closeReentrantCorners(
+  wasm: ManifoldToplevel,
+  footprint: CrossSection,
+  radius: number,
+  includeHoleCorners = true,
+): CrossSection {
+  return wasm.CrossSection.union(footprint.decompose().map((region) => {
+    const corners = region.toPolygons().flatMap((polygon) => {
+      const signedArea = polygon.reduce((area, point, index) => {
+        const next = polygon[(index + 1) % polygon.length];
+        return area + point[0] * next[1] - point[1] * next[0];
+      }, 0);
+      if (!includeHoleCorners && signedArea < 0) return [];
+      return polygon.filter((point, index) => {
+        const previous = polygon[(index + polygon.length - 1) % polygon.length];
+        const next = polygon[(index + 1) % polygon.length];
+        return (point[0] - previous[0]) * (next[1] - point[1]) -
+          (point[1] - previous[1]) * (next[0] - point[0]) < -1e-9;
+      });
+    });
+    if (corners.length === 0) return region;
+
+    const closed = region
+      .offset(radius, 'Round', 2, FILLET_SEGMENTS)
+      .offset(-radius, 'Round', 2, FILLET_SEGMENTS);
+    const cornerEnvelope = wasm.CrossSection.union(corners.map((corner) =>
+      wasm.CrossSection.circle(radius + SLIVER_EPSILON, FILLET_SEGMENTS).translate(corner)));
+    return region.add(closed.subtract(region).intersect(cornerEnvelope));
+  }));
+}
+
 function outerFootprint(wasm: ManifoldToplevel, cells: Cell[]): CrossSection {
-  return cellFootprint(wasm, cells)
+  const footprint = cellFootprint(wasm, cells)
     .offset(
       -(GRIDFINITY_DERIVED.perimeterClearancePerSide + GRIDFINITY_SPEC.outerCornerRadius),
       'Square',
       2,
     )
     .offset(GRIDFINITY_SPEC.outerCornerRadius, 'Round', 2, FILLET_SEGMENTS);
+  return closeReentrantCorners(wasm, footprint, GRIDFINITY_SPEC.outerCornerRadius, false);
 }
 
 function openingChannel(wasm: ManifoldToplevel, edge: Edge): CrossSection {
@@ -141,7 +173,8 @@ function roundedCavity(
   }
 
   const upperZ = floorZ + radius;
-  const seed = footprint
+  const closedFootprint = closeReentrantCorners(wasm, footprint, radius);
+  const seed = closedFootprint
     .offset(-radius, 'Round', 2, FILLET_SEGMENTS)
     .extrude(height - upperZ)
     .translate([0, 0, upperZ]);
