@@ -65,7 +65,11 @@ export interface Design {
   printer: PrinterSettings;
 }
 
-/** Complete, trusted, self-contained parameters for generating one bin. */
+/**
+ * Complete, trusted, self-contained parameters for generating one bin.
+ * Spatial values use generation coordinates, with editor Y mirrored across
+ * the complete design's occupied height.
+ */
 export interface BinParameters {
   binId: string;
   /** Height in mm, already converted from height units. */
@@ -83,7 +87,7 @@ export interface BinParameters {
 export interface BinPiece {
   /** Global-coordinate flat triangle soup (9 floats per triangle). */
   triangles: Float32Array;
-  /** This piece's footprint cells, echoed for viewer-side layout. */
+  /** Generation-coordinate footprint cells, echoed for viewer-side layout. */
   cells: Cell[];
 }
 

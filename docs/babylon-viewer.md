@@ -4,15 +4,17 @@ The normative preview/export relationship and coordinate rules live in [`geometr
 
 ## Input and meshes
 
-`BabylonViewer` receives the same `Bin[]` that `ExportMenu` splits into printable objects, plus the validated design snapshot that produced it. `previewLayout()` in `src/lib/preview.ts` — the "modifications for better viewing" stage — flattens each bin's grouped pieces and computes their preview-only multipart gap offsets from each piece's echoed footprint cells and its bin's cuts in the paired snapshot. Each flattened piece keeps the stable `binId` shared with the 2D editors, and materials and palette colors are keyed by that id, so the 3D preview always matches the editor color for the same bin even after deletions cause ids and array positions to diverge.
+`BabylonViewer` receives the same `Bin[]` that `ExportMenu` splits into printable objects, plus the validated design snapshot that produced it. `previewLayout()` in `src/lib/preview.ts` — the "modifications for better viewing" stage — flattens each bin's grouped pieces, mirrors its bin's cuts into the generated coordinate frame, and computes preview-only multipart gap offsets from those cuts and each piece's echoed generation-coordinate footprint cells. Each flattened piece keeps the stable `binId` shared with the 2D editors, and materials and palette colors are keyed by that id, so the 3D preview always matches the editor color for the same bin even after deletions cause ids and array positions to diverge.
 
 There is no preview STL, loader, vertex welding, smoothing, or vertex splitting. The viewer creates sequential indices for the soup, computes normals, and applies `VertexData` directly. Since every triangle owns three vertices, its normal remains independent and the preview is flat-faceted. Manifold emits outward counter-clockwise winding, so the shared Babylon materials explicitly use counter-clockwise face orientation in the right-handed scene; back-face culling remains enabled and hides only the solid interior.
 
 ## Coordinates
 
-Geometry preserves the editor's row-down X/Y values and uses Z-up. The right-handed Babylon scene rotates the shared root by `-Math.PI / 2` to display Z-up data in Y-up space. The default camera orbits from the opposite Z side so editor rows retain their visible direction without mirroring geometry.
+`buildBinParameters()` mirrors the editor's row-down Y values across the complete design's occupied height before geometry generation; geometry uses those global coordinates with Z-up. The right-handed Babylon scene rotates the shared root by `-Math.PI / 2` to display Z-up data in Y-up space. It does not apply another orientation correction. The default camera therefore presents the mirrored generation data in the same visual direction as the editor.
 
 Meshes stay at their generated coordinates. Only the `previewLayout()` offset is applied as a mesh transform, creating the 0.3 mm multipart gap without changing exported triangles.
+
+![Asymmetric vertically separated bins matching between the editor and viewer](./images/babylon-viewer-mirrored-multi-bin.png)
 
 ## Lifecycle and camera
 

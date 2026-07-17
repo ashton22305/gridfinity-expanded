@@ -107,7 +107,7 @@ test('renders an L-shaped triangle soup in editor orientation and resets the orb
 
   const viewer = page.locator('.viewer');
   await expect(viewer).toHaveAttribute('data-part-count', '1', { timeout: 30_000 });
-  await expect(viewer).toHaveAttribute('data-coordinate-orientation', 'editor-row-down');
+  await expect(viewer).toHaveAttribute('data-coordinate-orientation', 'generation-y-mirrored');
   await expect(viewer).toHaveAttribute('data-face-orientation', 'counter-clockwise');
   await expect(viewer).toHaveAttribute('data-mesh-topology', 'flat-triangle-soup');
 

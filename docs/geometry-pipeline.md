@@ -17,7 +17,7 @@ flowchart TB
   STL --> Export["Download"]
 ```
 
-The store owns bins, cuts, printer selection, and all editing behavior. The UI is responsible for only allowing valid parameters — controls constrain their own ranges and dependent values (the height slider re-clamps the shared fillet when it lowers the ceiling); there is no store clamping or validation layer between the UI and geometry generation, and enforcement of UI validity is best-effort during the alpha. `buildBinParameters()` converts the design directly into self-contained per-bin parameters, converting height units to millimetres and partitioning cells into piece footprints using the stored cuts. Geometry owns only solid construction and piece-footprint intersection; it trusts its input completely.
+The store owns bins, cuts, printer selection, and all editing behavior. The UI is responsible for only allowing valid parameters — controls constrain their own ranges and dependent values (the height slider re-clamps the shared fillet when it lowers the ceiling); there is no store clamping or validation layer between the UI and geometry generation, and enforcement of UI validity is best-effort during the alpha. `buildBinParameters()` converts the design into self-contained per-bin parameters, converting height units to millimetres, partitioning cells into piece footprints using the stored cuts, and mirroring every spatial value across the complete design's shared occupied Y extent. Geometry owns only solid construction and piece-footprint intersection; it trusts its input completely.
 
 Downstream of generation, `Bin[]` fans out to two branches. The viewer branch (`previewLayout()` in `src/lib/preview.ts`) flattens pieces and attaches the multipart preview gap offsets. The export branch (`toPrintableObjects()` in `src/lib/export/printableObjects.ts`) splits each bin's grouped pieces into distinct, fully named printable objects for STL serialization.
 
@@ -30,15 +30,15 @@ interface BinParameters {
   perimeterThickness: number;
   filletRadius: number;         // already validated by the frontend
   fasteners: FastenerSettings;
-  cells: Cell[];
-  openings: Edge[];
-  walls: Wall[];
-  pieces: Cell[][];             // piece footprints; array order defines piece index
+  cells: Cell[];                // mirrored generation coordinates
+  openings: Edge[];             // mirrored generation coordinates
+  walls: Wall[];                // mirrored generation coordinates
+  pieces: Cell[][];             // mirrored footprints; editor-derived array order defines piece index
 }
 
 interface BinPiece {
   triangles: Float32Array;      // global-coordinate flat triangle soup
-  cells: Cell[];                // footprint echoed for viewer-side layout
+  cells: Cell[];                // generation-coordinate footprint echoed for viewer-side layout
 }
 
 interface Bin {
@@ -75,9 +75,11 @@ Each finished piece is simplified with a sub-micron epsilon to collapse boolean 
 
 ## Coordinates, preview, and export
 
-Editor coordinates are model coordinates: X increases right, Y increases with editor rows, and Z increases upward. Geometry and STL preserve those coordinates. Origin placement is not changed per piece.
+`Design` remains in editor coordinates: X increases right and Y increases with rows down the screen. At the parameter boundary, `buildBinParameters()` mirrors the complete design across its maximum occupied row. If `maxRow` is the largest cell Y in any bin, cells and vertical edges use `y′ = maxRow − y`; horizontal edges and grid-line points use `y′ = maxRow + 1 − y`; and millimetre wall points use `y′ = (maxRow + 1) × 42 − y`. Piece groups are partitioned before mirroring, so their array indexes and export filenames keep their editor-derived identity even though their echoed `BinPiece.cells` use generation coordinates.
 
-Preview offsets are a viewer-branch concern: `previewLayout()` computes each piece's 0.3 mm multipart gap offset from the piece's echoed footprint cells and the cuts in the design snapshot paired with the generated bins. The viewer applies only that offset and the Z-up display rotation. Its camera is configured so the row-down design matches the editor. Sequential preview indices give each triangle an independent normal without smoothing or vertex splitting.
+Geometry and STL preserve these global generation coordinates with Z increasing upward. Origin placement is not changed per piece, and the preview and export branches consume the identical triangle soup.
+
+Preview offsets are a viewer-branch concern: `previewLayout()` mirrors the paired design snapshot's cuts into generation coordinates, then computes each piece's 0.3 mm multipart gap offset from those cuts and the piece's echoed footprint cells. The viewer applies only that offset and the Z-up display rotation; it does not compensate for orientation. Its camera presents the mirrored generation data in the same visual direction as the row-down editor. Sequential preview indices give each triangle an independent normal without smoothing or vertex splitting.
 
 `toPrintableObjects()` splits each bin's grouped pieces into distinct printable objects, deriving names from the bin's stable id and piece index. STL serialization writes each object's triangle soup directly and calculates one normal per triangle; preview offsets never affect printable coordinates.
 
@@ -85,6 +87,6 @@ The hook derives `BinParameters[]` and generates bins in parallel: it maintains 
 
 ## Printability gates
 
-`npm run check:manifold` exercises valid rectangular, irregular, U, ring/hole, opening, concave-perimeter, T- and cross-wall-junction, hardware, multiple-bin, multipart, and minimum-height/maximum-fillet fixtures through the production `buildBinParameters → generateGeometry` path. It reconstructs topology from triangle coordinates and requires non-empty pieces, watertight edges, consistent winding, no degenerates, duplicate faces, membranes, serialized-STL topology errors, or near-horizontal faces (by face normal) inside the fillet transition band — the terrace signature. Full-height wall fixtures must also retain interior top faces, guarding against a closing operation consuming narrow walls. The gate also asserts the 0.3 mm multipart gap through the viewer-branch `previewLayout()`.
+`npm run check:manifold` exercises valid rectangular, irregular, U, ring/hole, opening, concave-perimeter, T- and cross-wall-junction, hardware, multiple-bin, multipart, and minimum-height/maximum-fillet fixtures through the production `buildBinParameters → generateGeometry` path. It reconstructs topology from triangle coordinates and requires non-empty pieces, watertight edges, consistent winding, no degenerates, duplicate faces, membranes, serialized-STL topology errors, or near-horizontal faces (by face normal) inside the fillet transition band — the terrace signature. Full-height wall fixtures must also retain interior top faces, guarding against a closing operation consuming narrow walls. The gate also asserts the mirrored parameter-boundary orientation and the 0.3 mm multipart gap through the viewer-branch `previewLayout()`.
 
 Unit tests own cut-to-piece derivation, preview layout, and printable-object naming. Browser tests cover editor-matching orientation, flat-faceted preview, orbit/reset, multipart gaps, and STL export.

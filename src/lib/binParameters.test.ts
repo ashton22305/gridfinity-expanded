@@ -35,4 +35,56 @@ describe('bin parameters', () => {
   it('forwards the stable bin id for piece identity', () => {
     expect(buildBinParameters(design)[0].binId).toBe('editor-only-id');
   });
+
+  it('mirrors every spatial parameter across the shared occupied design height', () => {
+    const asymmetric: Design = {
+      ...design,
+      bins: [
+        {
+          id: 'upper-cut-bin',
+          cells: [{ x: 0, y: 0 }, { x: 0, y: 1 }, { x: 1, y: 1 }],
+          openings: [
+            { orientation: 'h', x: 0, y: 0 },
+            { orientation: 'v', x: 0, y: 1 },
+          ],
+          walls: [{
+            start: { x: 6, y: 47 },
+            end: { x: 79, y: 79 },
+            width: 1.6,
+          }],
+          cuts: [{ start: { x: 0, y: 1 }, end: { x: 1, y: 1 } }],
+        },
+        {
+          id: 'lower-bin',
+          cells: [{ x: 3, y: 4 }, { x: 4, y: 4 }],
+          openings: [{ orientation: 'h', x: 3, y: 5 }],
+          walls: [],
+          cuts: [],
+        },
+      ],
+    };
+
+    const parameters = buildBinParameters(asymmetric);
+
+    expect(parameters[0].cells).toEqual([
+      { x: 0, y: 4 }, { x: 0, y: 3 }, { x: 1, y: 3 },
+    ]);
+    expect(parameters[1].cells).toEqual([{ x: 3, y: 0 }, { x: 4, y: 0 }]);
+    expect(parameters[0].openings).toEqual([
+      { orientation: 'h', x: 0, y: 5 },
+      { orientation: 'v', x: 0, y: 3 },
+    ]);
+    expect(parameters[1].openings).toEqual([
+      { orientation: 'h', x: 3, y: 0 },
+    ]);
+    expect(parameters[0].walls).toEqual([{
+      start: { x: 6, y: 163 },
+      end: { x: 79, y: 131 },
+      width: 1.6,
+    }]);
+    expect(parameters[0].pieces).toEqual([
+      [{ x: 0, y: 4 }],
+      [{ x: 0, y: 3 }, { x: 1, y: 3 }],
+    ]);
+  });
 });

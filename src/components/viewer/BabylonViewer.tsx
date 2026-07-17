@@ -119,7 +119,8 @@ export function BabylonViewer({ bins, design, error }: Props) {
     scene.clearColor = new Color4(0.11, 0.11, 0.13, 1);
     sceneRef.current = scene;
 
-    // The generated mesh is Z-up. This is the viewer's only coordinate change.
+    // Generation has already mirrored editor Y. The viewer only rotates Z-up
+    // data into Babylon's Y-up display frame; it must not mirror it again.
     const root = new TransformNode('model-root', scene);
     root.rotation.x = -Math.PI / 2;
     rootRef.current = root;
@@ -199,7 +200,7 @@ export function BabylonViewer({ bins, design, error }: Props) {
     <div
       className="viewer"
       data-part-count={parts.length}
-      data-coordinate-orientation="editor-row-down"
+      data-coordinate-orientation="generation-y-mirrored"
       data-face-orientation={FACE_ORIENTATION}
       data-mesh-topology="flat-triangle-soup"
       data-preview-offsets={parts.map((part) =>
