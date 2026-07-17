@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildBinParameters } from '../lib/binParameters';
+import {
+  geometryCacheKey,
+  readCachedBin,
+  writeCachedBin,
+} from '../lib/geometryCache';
 import type {
   Bin,
+  BinParameters,
   Design,
   GenerateGeometryRequest,
   GenerateGeometryResponse,
@@ -24,6 +30,7 @@ interface PendingGeneration {
   /** Posted bin order; gathered results are reassembled to match. */
   binIds: string[];
   binsById: Map<string, Bin>;
+  cacheKeysByBinId: Map<string, string>;
   remaining: number;
 }
 
@@ -68,7 +75,11 @@ export function useBinGeometry(design: Design): GeometryState {
           fail();
           return;
         }
-        for (const bin of response.bins) pending.binsById.set(bin.binId, bin);
+        for (const bin of response.bins) {
+          pending.binsById.set(bin.binId, bin);
+          const cacheKey = pending.cacheKeysByBinId.get(bin.binId);
+          if (cacheKey) void writeCachedBin(cacheKey, bin).catch(() => undefined);
+        }
         pending.remaining -= 1;
         if (pending.remaining > 0) return;
         pendingRef.current = null;
@@ -83,30 +94,68 @@ export function useBinGeometry(design: Design): GeometryState {
       return worker;
     });
     workersRef.current = workers;
-    return () => workers.forEach((worker) => worker.terminate());
+    return () => {
+      revisionRef.current += 1;
+      workers.forEach((worker) => worker.terminate());
+    };
   }, []);
 
   useEffect(() => {
+    const revision = ++revisionRef.current;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      const revision = ++revisionRef.current;
-      pendingRef.current = {
-        revision,
-        design,
-        binIds: parameters.map((bin) => bin.binId),
-        binsById: new Map(),
-        remaining: parameters.length,
-      };
-      setState((current) => ({ ...current, generating: true, error: null }));
-      const workers = workersRef.current;
-      parameters.forEach((bin, index) => {
-        const request: GenerateGeometryRequest = { revision, bins: [bin] };
-        workers[index % workers.length]?.postMessage(request);
-      });
-      if (parameters.length === 0) {
-        pendingRef.current = null;
-        setState({ bins: [], design, generating: false, error: null });
-      }
+      void (async () => {
+        setState((current) => ({ ...current, generating: true, error: null }));
+        if (parameters.length === 0) {
+          pendingRef.current = null;
+          setState({ bins: [], design, generating: false, error: null });
+          return;
+        }
+
+        const lookups = await Promise.all(parameters.map(async (bin) => {
+          try {
+            const key = await geometryCacheKey(bin);
+            return { bin, key, cached: await readCachedBin(key, bin.binId) };
+          } catch {
+            return { bin, key: null, cached: null };
+          }
+        }));
+        if (revision !== revisionRef.current) return;
+
+        const binsById = new Map<string, Bin>();
+        const cacheKeysByBinId = new Map<string, string>();
+        const missing: BinParameters[] = [];
+        for (const lookup of lookups) {
+          if (lookup.key) cacheKeysByBinId.set(lookup.bin.binId, lookup.key);
+          if (lookup.cached) binsById.set(lookup.bin.binId, lookup.cached);
+          else missing.push(lookup.bin);
+        }
+
+        if (missing.length === 0) {
+          pendingRef.current = null;
+          setState({
+            bins: parameters.map((bin) => binsById.get(bin.binId)!),
+            design,
+            generating: false,
+            error: null,
+          });
+          return;
+        }
+
+        pendingRef.current = {
+          revision,
+          design,
+          binIds: parameters.map((bin) => bin.binId),
+          binsById,
+          cacheKeysByBinId,
+          remaining: missing.length,
+        };
+        const workers = workersRef.current;
+        missing.forEach((bin, index) => {
+          const request: GenerateGeometryRequest = { revision, bins: [bin] };
+          workers[index % workers.length]?.postMessage(request);
+        });
+      })();
     }, DEBOUNCE_MS);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);

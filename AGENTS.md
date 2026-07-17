@@ -10,7 +10,7 @@ Keep changes narrowly scoped, preserve unrelated working-tree changes, and inspe
 
 ## Project Structure
 
-`src/main.tsx` mounts the app, `src/App.tsx` defines the Mantine AppShell, `src/store.ts` owns Zustand state and explicit design commands, and `src/theme.ts` centralizes Mantine defaults. Domain logic is in `src/lib/`: shared contracts in `types.ts`, normative dimensions in `gridfinitySpec.ts`, per-bin worker-input derivation in `binParameters.ts`, viewer-branch preview layout in `preview.ts`, edge helpers in `edges.ts`, editable cut planning in `cuts.ts`, printer fit in `printers.ts`, geometry in `geometry/`, printable-object splitting and naming in `export/printableObjects.ts`, and STL serialization in `export/stl.ts`.
+`src/main.tsx` mounts the app, `src/App.tsx` defines the Mantine AppShell, `src/store.ts` owns Zustand state and explicit design commands, and `src/theme.ts` centralizes Mantine defaults. Domain logic is in `src/lib/`: shared contracts in `types.ts`, normative dimensions in `gridfinitySpec.ts`, per-bin worker-input derivation in `binParameters.ts`, persistent per-bin triangle caching in `geometryCache.ts`, viewer-branch preview layout in `preview.ts`, edge helpers in `edges.ts`, editable cut planning in `cuts.ts`, printer fit in `printers.ts`, geometry in `geometry/`, printable-object splitting and naming in `export/printableObjects.ts`, and STL serialization in `export/stl.ts`.
 
 Geometry runs in `src/workers/geometry.worker.ts`, driven by `src/hooks/useBinGeometry.ts`. UI components live under `src/components/`; the left panel contains the Shape, Walls, and Cuts spatial editors, the right panel contains Printer, Dimensions, and Features settings, and `BabylonViewer.tsx` renders generated triangle meshes directly. Validation scripts are in `scripts/`; Vitest files live beside source as `*.test.ts`; browser tests live in `e2e/`. [`docs/geometry-pipeline.md`](./docs/geometry-pipeline.md) is the canonical specification and architecture record.
 
@@ -28,7 +28,7 @@ Editor coordinates are model coordinates. The viewer camera, not geometry, is re
 
 The alpha generator assumes every supplied bin is edge-connected and otherwise valid. Do not add geometry-side component normalization, repair, rejection, fallback behavior, or tests that define disconnected-bin behavior. Enclosed holes remain supported. Full specification, editing, cut, coordinate, and invalid-input rules live in [`docs/geometry-pipeline.md`](./docs/geometry-pipeline.md); future rule changes must update that document and relevant happy-path tests together.
 
-When changing the geometry pipeline (`src/lib/geometry/`, `src/workers/geometry.worker.ts`, `src/hooks/useBinGeometry.ts`, `src/lib/binParameters.ts`, `src/lib/preview.ts`, `src/lib/export/printableObjects.ts`, `src/lib/cuts.ts`, `src/lib/gridfinitySpec.ts`, `src/lib/edges.ts`) or the Babylon viewer (`src/components/viewer/BabylonViewer.tsx`), update the matching document in `docs/` in the same change.
+When changing the geometry pipeline (`src/lib/geometry/`, `src/workers/geometry.worker.ts`, `src/hooks/useBinGeometry.ts`, `src/lib/binParameters.ts`, `src/lib/geometryCache.ts`, `src/lib/preview.ts`, `src/lib/export/printableObjects.ts`, `src/lib/cuts.ts`, `src/lib/gridfinitySpec.ts`, `src/lib/edges.ts`) or the Babylon viewer (`src/components/viewer/BabylonViewer.tsx`), update the matching document in `docs/` in the same change.
 
 ## Validation and Completion
 
