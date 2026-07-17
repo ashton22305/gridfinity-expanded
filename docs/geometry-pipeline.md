@@ -7,7 +7,10 @@ This is the canonical specification and architecture record for the alpha genera
 ```mermaid
 flowchart TB
   Frontend["Frontend (store, editors — only allows valid parameters)"] --> Params["BinParameters[]"]
-  Params --> Generation["Geometry generation (worker pool, one bin per message)"]
+  Params --> Cache["IndexedDB geometry cache (per-bin parameter hash)"]
+  Cache -->|miss| Generation["Geometry generation (worker pool, one bin per message)"]
+  Generation --> Cache
+  Cache -->|hit| Bins["Bin[]"]
   Generation --> Bins["Bin[]"]
   Bins --> Layout["Modifications for better viewing (previewLayout)"]
   Layout --> Viewer["Babylon viewer"]
@@ -47,7 +50,7 @@ interface Bin {
 }
 ```
 
-Array order supplies each bin's piece index. Each bin carries its stable store id so preview colors and export filenames follow the same bin identity as the 2D editors, even after bins are deleted and ids are reused. Geometry receives no cuts, printers, filenames, or presentation transforms, and emits no preview data beyond each piece's echoed footprint cells.
+Array order supplies each bin's piece index. Each bin carries its stable store id so preview colors and export filenames follow the same bin identity as the 2D editors, even after bins are deleted and ids are reused. Cache keys exclude that identity: a hit reapplies the requesting bin's current id while preserving the cached piece order, cells, and triangle arrays. Geometry receives no cuts, printers, filenames, or presentation transforms, and emits no preview data beyond each piece's echoed footprint cells.
 
 ## Gridfinity specification
 
@@ -81,10 +84,12 @@ Preview offsets are a viewer-branch concern: `previewLayout()` computes each pie
 
 `toPrintableObjects()` splits each bin's grouped pieces into distinct printable objects, deriving names from the bin's stable id and piece index. STL serialization writes each object's triangle soup directly and calculates one normal per triangle; preview offsets never affect printable coordinates.
 
-The hook derives `BinParameters[]` and generates bins in parallel: it maintains a small worker pool (sized from `navigator.hardwareConcurrency`, capped at 4), debounces changes, increments a revision, and posts one single-bin message per bin round-robin across the pool. Responses for the current revision are gathered and reassembled in design order; stale replies are ignored, any failure clears the pending revision and reports one generic message, and the completed `Bin[]` is paired with the design snapshot that produced it. There is no serialized design key.
+The hook derives `BinParameters[]`, debounces changes, and increments a revision before asynchronously checking the per-bin IndexedDB cache. Cache keys are SHA-256 hashes over an explicit cache-version salt and every worker-consumed parameter except `binId`; editor identity and printer metadata therefore do not create duplicate meshes. Complete hits bypass worker messages. Partial hits post only missing bins, one single-bin message round-robin across a small worker pool (sized from `navigator.hardwareConcurrency`, capped at 4), then merge cached and generated bins back into design order. Successful worker results are persisted without delaying rendering.
+
+Cache records contain structured-cloned per-piece `Float32Array` triangle soups and footprint cells, not STL bytes or preview transforms. Reads validate the record shape and refresh its access time. Writes trigger least-recently-used eviction when the approximate stored mesh size exceeds 100 MB. Hashing, IndexedDB, corruption, and quota errors are all treated as cache misses or ignored writes; only worker-generation failures become the hook's generic geometry error. Revision checks discard stale cache lookups and worker replies, and each completed `Bin[]` remains paired with the design snapshot that produced it.
 
 ## Printability gates
 
 `npm run check:manifold` exercises valid rectangular, irregular, U, ring/hole, opening, wall, hardware, multiple-bin, multipart, and minimum-height/maximum-fillet fixtures through the production `buildBinParameters → generateGeometry` path. It reconstructs topology from triangle coordinates and requires non-empty pieces, watertight edges, consistent winding, no degenerates, duplicate faces, membranes, serialized-STL topology errors, or near-horizontal faces (by face normal) inside the fillet transition band — the terrace signature. It also asserts the 0.3 mm multipart gap through the viewer-branch `previewLayout()`.
 
-Unit tests own cut-to-piece derivation, preview layout, and printable-object naming. Browser tests cover editor-matching orientation, flat-faceted preview, orbit/reset, multipart gaps, and STL export.
+Unit tests own cut-to-piece derivation, preview layout, and printable-object naming. Browser tests cover editor-matching orientation, flat-faceted preview, orbit/reset, multipart gaps, STL export, cache reuse across parameter reverts and reloads, partial cache hits, and the IndexedDB-unavailable fallback.

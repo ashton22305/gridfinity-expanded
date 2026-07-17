@@ -11,6 +11,98 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test('reuses cached geometry after reverting parameters and reloading', async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    window.Worker = class CountingWorker extends NativeWorker {
+      postMessage(message: unknown, options?: StructuredSerializeOptions | Transferable[]) {
+        const count = Number(localStorage.getItem('geometry-worker-requests') ?? 0) + 1;
+        localStorage.setItem('geometry-worker-requests', String(count));
+        super.postMessage(message, options as StructuredSerializeOptions);
+      }
+    };
+  });
+  await page.goto('/');
+
+  const exportButton = page.getByRole('button', { name: /Export STL/ });
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(1);
+  await expect.poll(() => page.evaluate(async () => {
+    const databases = await indexedDB.databases();
+    if (!databases.some((database) => database.name === 'gridfinity-geometry-cache')) return 0;
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('gridfinity-geometry-cache');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const count = await new Promise<number>((resolve, reject) => {
+      const request = database.transaction('meshes').objectStore('meshes').count();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    return count;
+  })).toBe(1);
+
+  await page.getByRole('button', { name: '+ New' }).click();
+  await page.locator('.cell[aria-pressed="false"]').first().click();
+  await expect(page.getByText('5 cells in 2 bins', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(2);
+  await expect(page.getByRole('button', { name: /Export STL/ })).toBeEnabled({ timeout: 30_000 });
+
+  await page.getByRole('button', { name: 'Cell 2,0' }).click();
+  await expect(page.getByText('4 cells', { exact: true })).toBeVisible();
+  await page.waitForTimeout(750);
+  expect(await page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(2);
+
+  await page.getByRole('button', { name: 'Bin 1' }).click();
+  await page.getByRole('button', { name: 'Cell 1,1' }).click();
+  await expect(page.getByText('3 cells', { exact: true })).toBeVisible();
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(3);
+
+  await page.getByRole('button', { name: 'Cell 1,1' }).click();
+  await expect(page.getByText('4 cells', { exact: true })).toBeVisible();
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await page.waitForTimeout(750);
+  expect(await page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(3);
+
+  await page.reload();
+  await expect(page.locator('.viewer')).toHaveAttribute('data-part-count', '1', { timeout: 30_000 });
+  await expect(page.getByRole('button', { name: /Export STL/ })).toBeEnabled({ timeout: 30_000 });
+  await page.waitForTimeout(750);
+  expect(await page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(3);
+});
+
+test('renders geometry when IndexedDB is unavailable', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'indexedDB', {
+      configurable: true,
+      get: () => { throw new Error('IndexedDB unavailable'); },
+    });
+    const NativeWorker = window.Worker;
+    Object.defineProperty(window, '__geometryWorkerRequests', { value: 0, writable: true });
+    window.Worker = class CountingWorker extends NativeWorker {
+      postMessage(message: unknown, options?: StructuredSerializeOptions | Transferable[]) {
+        (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests++;
+        super.postMessage(message, options as StructuredSerializeOptions);
+      }
+    };
+  });
+  await page.goto('/');
+
+  await expect(page.locator('.viewer')).toHaveAttribute('data-part-count', '1', { timeout: 30_000 });
+  await expect(page.getByRole('button', { name: /Export STL/ })).toBeEnabled({ timeout: 30_000 });
+  expect(await page.evaluate(() =>
+    (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests)).toBe(1);
+});
+
 test('keeps selected-bin painting explicit and exposes the simplified controls', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
