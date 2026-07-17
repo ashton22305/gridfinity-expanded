@@ -66,6 +66,20 @@ describe('explicit design commands', () => {
     ]);
   });
 
+  it('keeps a held paint gesture in its initial target bin', () => {
+    useAppStore.getState().paintCell({ x: 4, y: 0 });
+    const gestureBinId = useAppStore.getState().selectedBinId;
+    useAppStore.getState().paintCell({ x: 5, y: 1 }, gestureBinId);
+
+    const state = useAppStore.getState();
+    expect(state.selectedBinId).toBe('bin-2');
+    expect(state.design.bins).toHaveLength(2);
+    expect(state.design.bins.find((bin) => bin.id === 'bin-2')?.cells).toEqual([
+      { x: 4, y: 0 },
+      { x: 5, y: 1 },
+    ]);
+  });
+
   it('reassigns a connected cell and resets both affected bins', () => {
     const design = copyDesign();
     design.bins[0] = {

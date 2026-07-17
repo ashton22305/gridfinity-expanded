@@ -11,7 +11,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test('keeps painted bins connected and exposes the simplified controls', async ({ page }) => {
+test('locks each paint gesture to one bin and exposes the simplified controls', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => {
@@ -42,7 +42,7 @@ test('keeps painted bins connected and exposes the simplified controls', async (
 
   await page.getByRole('button', { name: 'Bin 1' }).click();
   const dragStart = await page.getByRole('button', { name: 'Cell 4,2' }).boundingBox();
-  const dragEnd = await page.getByRole('button', { name: 'Cell 5,2' }).boundingBox();
+  const dragEnd = await page.getByRole('button', { name: 'Cell 5,3' }).boundingBox();
   expect(dragStart).not.toBeNull();
   expect(dragEnd).not.toBeNull();
   await page.mouse.move(dragStart!.x + dragStart!.width / 2, dragStart!.y + dragStart!.height / 2);

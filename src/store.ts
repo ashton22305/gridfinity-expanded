@@ -111,7 +111,7 @@ interface AppState {
   panelWidths: Record<PanelSide, number>;
   selectBin: (id: string) => void;
   startNewBin: () => void;
-  paintCell: (cell: Cell) => void;
+  paintCell: (cell: Cell, targetBinId?: string) => void;
   removeSelectedCell: (cell: Cell) => void;
   setHeightUnits: (heightUnits: number) => void;
   setPerimeterThickness: (perimeterThickness: number) => void;
@@ -142,15 +142,15 @@ export const useAppStore = create<AppState>((set) => ({
 
   startNewBin: () => set((state) => ({ selectedBinId: nextBinId(state.design.bins) })),
 
-  paintCell: (cell) => set((state) => {
+  paintCell: (cell, targetBinId) => set((state) => {
     const key = cellKey(cell);
     const owner = state.design.bins.find((bin) => bin.cells.some((value) => cellKey(value) === key));
-    if (owner?.id === state.selectedBinId) return state;
+    if (owner?.id === (targetBinId ?? state.selectedBinId)) return state;
 
     const selected = state.design.bins.find((bin) => bin.id === state.selectedBinId);
-    const targetId = selected && !isEdgeConnected(cell, selected.cells)
+    const targetId = targetBinId ?? (selected && !isEdgeConnected(cell, selected.cells)
       ? nextBinId(state.design.bins)
-      : state.selectedBinId;
+      : state.selectedBinId);
 
     const bins = state.design.bins
       .map((bin) => {
