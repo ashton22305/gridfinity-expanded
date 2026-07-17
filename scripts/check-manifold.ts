@@ -1,10 +1,12 @@
 /** Production-path manifold and serialized-STL printability gate. */
+import { buildBinParameters } from '../src/lib/binParameters';
 import { trianglesToStl } from '../src/lib/export/stl';
 import { generateGeometry } from '../src/lib/geometry/gridfinity';
 import { initManifold } from '../src/lib/geometry/manifold';
-import { buildGeometryInput } from '../src/lib/geometryInput';
+import { previewLayout } from '../src/lib/preview';
 import { cutsForPrinter } from '../src/lib/printers';
-import { GRIDFINITY_SPEC } from '../src/lib/gridfinitySpec';
+import { validateDesign } from '../src/lib/validation';
+import { GRIDFINITY_SPEC, gridfinityHeight } from '../src/lib/gridfinitySpec';
 import type { BinDesign, Cell, Design, Edge, Wall } from '../src/lib/types';
 
 interface Report {
@@ -315,11 +317,14 @@ const wasm = await initManifold();
 let failed = false;
 for (const fixture of cases) {
   try {
-    const input = buildGeometryInput(fixture.value);
-    const parts = generateGeometry(wasm, input);
+    const validated = validateDesign(fixture.value);
+    const bins = generateGeometry(wasm, buildBinParameters(validated));
+    const parts = bins.flatMap((generatedBin) => generatedBin.pieces);
     if (fixture.expectedParts !== undefined && parts.length !== fixture.expectedParts) {
       throw new Error(`expected ${fixture.expectedParts} parts, received ${parts.length}`);
     }
+    const filletRadius = validated.filletRadius;
+    const height = gridfinityHeight(validated.heightUnits);
     for (const [partIndex, part] of parts.entries()) {
       const report = analyzeTriangleSoup(part.triangles);
       const serialized = stlBoundary(trianglesToStl(part.triangles));
@@ -327,7 +332,7 @@ for (const fixture of cases) {
       let maxZ = Number.NEGATIVE_INFINITY;
       let horizontalTransitionFaces = 0;
       const floorZ = GRIDFINITY_SPEC.baseHeight + GRIDFINITY_SPEC.floorThickness;
-      const transitionTop = floorZ + input.filletRadius;
+      const transitionTop = floorZ + filletRadius;
       for (let index = 0; index < part.triangles.length; index += 9) {
         const z = [part.triangles[index + 2], part.triangles[index + 5], part.triangles[index + 8]];
         minZ = Math.min(minZ, ...z);
@@ -352,7 +357,7 @@ for (const fixture of cases) {
         }
       }
       const coordinateError = Math.abs(minZ) > 1e-4 ||
-        Math.abs(maxZ - input.height) > 1e-3;
+        Math.abs(maxZ - height) > 1e-3;
       const defective = report.triangles === 0 ||
         report.degenerate || report.boundaryEdges || report.nonManifoldEdges ||
         report.orientationErrors || report.duplicateFaces || report.coincidentFaces || report.membranes ||
@@ -379,20 +384,24 @@ try {
     bin('top', [{ x: 0, y: 0 }]),
     bin('bottom', [{ x: 0, y: 2 }]),
   ]);
-  const parts = generateGeometry(wasm, buildGeometryInput(orientationDesign));
+  const orientationBins = generateGeometry(
+    wasm,
+    buildBinParameters(validateDesign(orientationDesign)),
+  );
   const minY = (triangles: Float32Array) => {
     let value = Number.POSITIVE_INFINITY;
     for (let index = 1; index < triangles.length; index += 3) value = Math.min(value, triangles[index]);
     return value;
   };
-  if (!(minY(parts[1].triangles) > minY(parts[0].triangles))) {
+  if (!(minY(orientationBins[1].pieces[0].triangles) > minY(orientationBins[0].pieces[0].triangles))) {
     throw new Error('geometry did not preserve editor row-down coordinates');
   }
-  const cutInput = buildGeometryInput(
+  const cutDesign = validateDesign(
     design([bin('bin-1', wideCells, { cuts: wideCuts })], { printer: smallPrinter }),
   );
-  const cutParts = generateGeometry(wasm, cutInput);
-  const previewXs = [...new Set(cutParts.map((part) => part.previewOffset.x))].sort((a, b) => a - b);
+  const cutBins = generateGeometry(wasm, buildBinParameters(cutDesign));
+  const previewPieces = previewLayout(cutBins, cutDesign);
+  const previewXs = [...new Set(previewPieces.map((piece) => piece.previewOffset.x))].sort((a, b) => a - b);
   if (previewXs.length < 2 || Math.abs(previewXs[1] - previewXs[0] - 0.3) > 1e-6) {
     throw new Error('multipart preview transforms do not create a 0.3 mm gap');
   }

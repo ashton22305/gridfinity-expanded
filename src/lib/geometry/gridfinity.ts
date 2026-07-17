@@ -4,11 +4,11 @@ import {
   GRIDFINITY_SPEC,
 } from '../gridfinitySpec';
 import type {
+  Bin,
+  BinParameters,
   Cell,
   Edge,
-  GeneratedPart,
-  GeometryBin,
-  GeometryInput,
+  FastenerSettings,
   Wall,
 } from '../types';
 import { manifoldTriangles } from './manifold';
@@ -107,7 +107,7 @@ function wallFootprint(wasm: ManifoldToplevel, wall: Wall): CrossSection {
 /** Complete trusted cavity footprint before its vertical floor fillet. */
 function cavityFootprint(
   wasm: ManifoldToplevel,
-  bin: GeometryBin,
+  bin: BinParameters,
   perimeterThickness: number,
 ): CrossSection {
   let cavity = cellFootprint(wasm, bin.cells).offset(
@@ -166,16 +166,20 @@ function canonicalHardwareCutter(
     wasm.Manifold.cylinder(depth, radius, radius, segments).translate([x, y, 0])));
 }
 
-function hardwareCutters(wasm: ManifoldToplevel, input: GeometryInput, cells: Cell[]): Manifold[] {
+function hardwareCutters(
+  wasm: ManifoldToplevel,
+  fasteners: FastenerSettings,
+  cells: Cell[],
+): Manifold[] {
   const hardware = GRIDFINITY_SPEC.hardware;
   const canonical = [
-    ...(input.fasteners.magnets ? [canonicalHardwareCutter(
+    ...(fasteners.magnets ? [canonicalHardwareCutter(
       wasm,
       hardware.magnet.recessDiameter / 2,
       hardware.magnet.recessDepth,
       32,
     )] : []),
-    ...(input.fasteners.m3 ? [canonicalHardwareCutter(
+    ...(fasteners.m3 ? [canonicalHardwareCutter(
       wasm,
       hardware.m3.recessDiameter / 2,
       hardware.m3.recessDepth,
@@ -191,8 +195,7 @@ function hardwareCutters(wasm: ManifoldToplevel, input: GeometryInput, cells: Ce
 
 function buildBinSolid(
   wasm: ManifoldToplevel,
-  input: GeometryInput,
-  bin: GeometryBin,
+  bin: BinParameters,
   base: Manifold,
 ): Manifold {
   const bases = bin.cells.map((cell) => base.translate([
@@ -201,16 +204,16 @@ function buildBinSolid(
     0,
   ]));
   const body = outerFootprint(wasm, bin.cells)
-    .extrude(input.height - BASE.height)
+    .extrude(bin.height - BASE.height)
     .translate([0, 0, BASE.height]);
   let solid = wasm.Manifold.union([...bases, body]);
   solid = solid.subtract(roundedCavity(
     wasm,
-    cavityFootprint(wasm, bin, input.perimeterThickness),
-    input.filletRadius,
-    input.height,
+    cavityFootprint(wasm, bin, bin.perimeterThickness),
+    bin.filletRadius,
+    bin.height,
   ));
-  const cutters = hardwareCutters(wasm, input, bin.cells);
+  const cutters = hardwareCutters(wasm, bin.fasteners, bin.cells);
   if (cutters.length > 0) solid = solid.subtract(wasm.Manifold.union(cutters));
   return solid;
 }
@@ -224,25 +227,25 @@ function partCutter(
   return cellFootprint(wasm, cells).extrude(height + 2).translate([0, 0, -1]);
 }
 
-/** Build finished solids from trusted input and return their native triangle soups. */
+/** Build finished solids from trusted parameters and return cut pieces grouped per bin. */
 export function generateGeometry(
   wasm: ManifoldToplevel,
-  input: GeometryInput,
-): GeneratedPart[] {
-  const generated: GeneratedPart[] = [];
+  bins: BinParameters[],
+): Bin[] {
   const base = canonicalBase(wasm);
-  for (const bin of input.bins) {
-    const solid = buildBinSolid(wasm, input, bin, base);
-    bin.parts.forEach((cells, partIndex) => {
-      const part = bin.parts.length === 1
-        ? solid
-        : solid.intersect(partCutter(wasm, cells, input.height));
-      generated.push({
-        binId: bin.id,
-        triangles: manifoldTriangles(part.simplify(SLIVER_EPSILON)),
-        previewOffset: bin.previewOffsets[partIndex],
-      });
-    });
-  }
-  return generated;
+  return bins.map((bin) => {
+    const solid = buildBinSolid(wasm, bin, base);
+    return {
+      binId: bin.binId,
+      pieces: bin.pieces.map((cells) => {
+        const piece = bin.pieces.length === 1
+          ? solid
+          : solid.intersect(partCutter(wasm, cells, bin.height));
+        return {
+          triangles: manifoldTriangles(piece.simplify(SLIVER_EPSILON)),
+          cells,
+        };
+      }),
+    };
+  });
 }

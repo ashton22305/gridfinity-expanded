@@ -8,18 +8,6 @@ export function downloadBuffer(buffer: ArrayBuffer, filename: string, mimeType: 
   URL.revokeObjectURL(url);
 }
 
-export function partFilename(
-  binId: string,
-  binCount: number,
-  partIndex: number,
-  partCount: number,
-): string {
-  const stem = binCount === 1 ? 'gridfinity-bin' : `gridfinity-${binId}`;
-  return partCount === 1
-    ? `${stem}.stl`
-    : `${stem}-part-${partIndex + 1}-of-${partCount}.stl`;
-}
-
 /** Serialize the exact generated triangle soup to binary STL. */
 export function trianglesToStl(triangles: Float32Array): ArrayBuffer {
   const triangleCount = triangles.length / 9;

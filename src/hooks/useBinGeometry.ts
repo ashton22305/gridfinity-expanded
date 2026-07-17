@@ -1,29 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { buildGeometryInput } from '../lib/geometryInput';
+import { buildBinParameters } from '../lib/binParameters';
+import { validateDesign } from '../lib/validation';
 import type {
+  Bin,
   Design,
   GenerateGeometryRequest,
   GenerateGeometryResponse,
-  GeneratedPart,
 } from '../lib/types';
 
 const DEBOUNCE_MS = 300;
 
 export interface GeometryState {
-  parts: GeneratedPart[];
+  bins: Bin[];
+  /** The validated design snapshot that produced `bins`, for viewer layout. */
+  design: Design | null;
   generating: boolean;
   error: string | null;
 }
 
 export function useBinGeometry(design: Design): GeometryState {
   const [state, setState] = useState<GeometryState>({
-    parts: [],
+    bins: [],
+    design: null,
     generating: false,
     error: null,
   });
-  const input = useMemo(() => buildGeometryInput(design), [design]);
+  const validated = useMemo(() => validateDesign(design), [design]);
+  const parameters = useMemo(() => buildBinParameters(validated), [validated]);
   const workerRef = useRef<Worker | null>(null);
   const revisionRef = useRef(0);
+  const postedDesignRef = useRef<Design | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -36,7 +42,12 @@ export function useBinGeometry(design: Design): GeometryState {
       const response = event.data;
       if (response.revision !== revisionRef.current) return;
       if (response.ok) {
-        setState({ parts: response.parts, generating: false, error: null });
+        setState({
+          bins: response.bins,
+          design: postedDesignRef.current,
+          generating: false,
+          error: null,
+        });
       } else {
         setState((current) => ({ ...current, generating: false, error: response.error }));
       }
@@ -55,14 +66,15 @@ export function useBinGeometry(design: Design): GeometryState {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       const revision = ++revisionRef.current;
-      const request: GenerateGeometryRequest = { input, revision };
+      postedDesignRef.current = validated;
+      const request: GenerateGeometryRequest = { bins: parameters, revision };
       setState((current) => ({ ...current, generating: true, error: null }));
       workerRef.current?.postMessage(request);
     }, DEBOUNCE_MS);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [input]);
+  }, [parameters, validated]);
 
   return state;
 }

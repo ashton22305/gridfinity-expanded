@@ -10,7 +10,7 @@ import { useAppStore } from './store';
 export default function App() {
   const design = useAppStore((s) => s.design);
   const panelWidths = useAppStore((s) => s.panelWidths);
-  const { parts, generating, error } = useBinGeometry(design);
+  const { bins, design: generatedDesign, generating, error } = useBinGeometry(design);
 
   return (
     <AppShell
@@ -26,11 +26,7 @@ export default function App() {
           <Text size="sm" fw={600} c="bright" lts="0.02em">
             gridfinity-expanded
           </Text>
-          <ExportMenu
-            parts={parts}
-            binCount={design.bins.length}
-            generating={generating}
-          />
+          <ExportMenu bins={bins} generating={generating} />
         </Group>
       </AppShell.Header>
       <AppShell.Navbar className="app-panel">
@@ -42,7 +38,7 @@ export default function App() {
         <PanelResizeHandle panel="settings" />
       </AppShell.Aside>
       <AppShell.Main className="app-main">
-        <BabylonViewer parts={parts} error={error} />
+        <BabylonViewer bins={bins} design={generatedDesign} error={error} />
       </AppShell.Main>
     </AppShell>
   );

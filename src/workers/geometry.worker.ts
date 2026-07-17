@@ -7,12 +7,13 @@ import type { GenerateGeometryRequest, GenerateGeometryResponse } from '../lib/t
 const manifoldReady = initManifold(() => wasmUrl);
 
 self.onmessage = async (event: MessageEvent<GenerateGeometryRequest>) => {
-  const { input, revision } = event.data;
+  const { bins: parameters, revision } = event.data;
   try {
     const wasm = await manifoldReady;
-    const parts = generateGeometry(wasm, input);
-    const response: GenerateGeometryResponse = { ok: true, revision, parts };
-    const transfer = parts.map((part) => part.triangles.buffer as ArrayBuffer);
+    const bins = generateGeometry(wasm, parameters);
+    const response: GenerateGeometryResponse = { ok: true, revision, bins };
+    const transfer = bins.flatMap((bin) =>
+      bin.pieces.map((piece) => piece.triangles.buffer as ArrayBuffer));
     self.postMessage(response, transfer);
   } catch {
     const response: GenerateGeometryResponse = {

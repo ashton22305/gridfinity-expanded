@@ -55,7 +55,7 @@ export interface BinDesign {
   cuts: Cut[];
 }
 
-/** Plain editor-owned input sent across the worker boundary. */
+/** Plain editor-owned state; validated before deriving worker input. */
 export interface Design {
   bins: BinDesign[];
   heightUnits: number;
@@ -65,28 +65,40 @@ export interface Design {
   printer: PrinterSettings;
 }
 
-/** Trusted, generation-ready input sent across the worker boundary. */
-export interface GeometryInput {
+/** Complete, trusted, self-contained parameters for generating one bin. */
+export interface BinParameters {
+  binId: string;
+  /** Height in mm, already converted from height units. */
   height: number;
   perimeterThickness: number;
+  /** Already validated by the frontend validation stage. */
   filletRadius: number;
   fasteners: FastenerSettings;
-  bins: GeometryBin[];
-}
-
-export interface GeometryBin {
-  id: string;
   cells: Cell[];
   openings: Edge[];
   walls: Wall[];
-  parts: Cell[][];
-  previewOffsets: Point2[];
+  /** Piece footprints from cut planning; array order defines piece index. */
+  pieces: Cell[][];
 }
 
-export interface GeneratedPart {
-  binId: string;
+export interface BinPiece {
+  /** Global-coordinate flat triangle soup (9 floats per triangle). */
   triangles: Float32Array;
-  previewOffset: Point2;
+  /** This piece's footprint cells, echoed for viewer-side layout. */
+  cells: Cell[];
+}
+
+/** One generated logical bin with its cut pieces grouped together. */
+export interface Bin {
+  binId: string;
+  pieces: BinPiece[];
+}
+
+/** One distinct printable part, split out of a bin and fully named. */
+export interface PrintableObject {
+  /** Complete STL filename. */
+  name: string;
+  triangles: Float32Array;
 }
 
 export interface BedFitResult {
@@ -98,9 +110,9 @@ export interface BedFitResult {
 
 export interface GenerateGeometryRequest {
   revision: number;
-  input: GeometryInput;
+  bins: BinParameters[];
 }
 
 export type GenerateGeometryResponse =
-  | { ok: true; revision: number; parts: GeneratedPart[] }
+  | { ok: true; revision: number; bins: Bin[] }
   | { ok: false; revision: number; error: string };

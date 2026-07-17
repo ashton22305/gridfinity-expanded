@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Button, Text } from '@mantine/core';
 import {
   Animation,
@@ -18,7 +18,8 @@ import {
   Vector3,
   VertexData,
 } from '@babylonjs/core';
-import type { GeneratedPart } from '../../lib/types';
+import { previewLayout } from '../../lib/preview';
+import type { Bin, Design } from '../../lib/types';
 import { binColor } from '../sidebar/binColors';
 
 const DEFAULT_ALPHA = -Math.PI / 4;
@@ -30,11 +31,14 @@ const ANIMATION_FRAMES = 36;
 const FACE_ORIENTATION = 'counter-clockwise';
 
 interface Props {
-  parts: GeneratedPart[];
+  bins: Bin[];
+  /** The validated design snapshot that produced `bins`. */
+  design: Design | null;
   error: string | null;
 }
 
-export function BabylonViewer({ parts, error }: Props) {
+export function BabylonViewer({ bins, design, error }: Props) {
+  const parts = useMemo(() => previewLayout(bins, design), [bins, design]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<Scene | null>(null);
   const cameraRef = useRef<ArcRotateCamera | null>(null);
@@ -158,7 +162,7 @@ export function BabylonViewer({ parts, error }: Props) {
     currentRef.current.meshes.forEach((mesh) => mesh.dispose());
     currentRef.current.materials.forEach((material) => material.dispose());
     const materials = new Map<string, StandardMaterial>();
-    const meshes = parts.map((part, partIndex) => {
+    const meshes = parts.map((part) => {
       const binKey = part.binId;
       let material = materials.get(binKey);
       if (!material) {
@@ -168,7 +172,7 @@ export function BabylonViewer({ parts, error }: Props) {
         material.sideOrientation = Material.CounterClockWiseSideOrientation;
         materials.set(binKey, material);
       }
-      const mesh = new Mesh(`${binKey}-part-${partIndex + 1}`, scene);
+      const mesh = new Mesh(`${binKey}-part-${part.pieceIndex + 1}`, scene);
       const vertexData = new VertexData();
       const vertexCount = part.triangles.length / 3;
       const indices = Uint32Array.from({ length: vertexCount }, (_, index) => index);
