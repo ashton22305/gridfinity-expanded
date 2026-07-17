@@ -1,4 +1,5 @@
 import { IMPLEMENTATION_ALLOWANCES } from './gridfinitySpec';
+import { maximumOccupiedRow, mirrorCut } from './coordinates';
 import type { Bin, Cell, Cut, Design, Point2 } from './types';
 
 /** One flattened piece positioned for the multipart preview gap. */
@@ -34,8 +35,10 @@ export function previewOffsetFor(cells: Cell[], cuts: Cut[], pieceCount: number)
 
 /** Modifications for better viewing: flatten bins and attach multipart gap offsets. */
 export function previewLayout(bins: Bin[], design: Design | null): PreviewPiece[] {
+  const maximumRow = design ? maximumOccupiedRow(design) : null;
   return bins.flatMap((bin) => {
-    const cuts = design?.bins.find((candidate) => candidate.id === bin.binId)?.cuts ?? [];
+    const designCuts = design?.bins.find((candidate) => candidate.id === bin.binId)?.cuts ?? [];
+    const cuts = designCuts.map((cut) => mirrorCut(cut, maximumRow!));
     return bin.pieces.map((piece, pieceIndex) => ({
       binId: bin.binId,
       pieceIndex,

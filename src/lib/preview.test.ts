@@ -42,5 +42,33 @@ describe('preview layout', () => {
     }];
     expect(previewLayout(single, design)[0].previewOffset).toEqual({ x: 0, y: 0 });
     expect(previewLayout(single, null)[0].previewOffset).toEqual({ x: 0, y: 0 });
+    expect(previewLayout(single, { ...design, bins: [] })[0].previewOffset)
+      .toEqual({ x: 0, y: 0 });
+  });
+
+  it('mirrors horizontal cuts before spacing generation-coordinate pieces', () => {
+    const horizontalDesign: Design = {
+      ...design,
+      bins: [{
+        id: 'bin-1',
+        cells: [{ x: 0, y: 0 }, { x: 0, y: 1 }],
+        openings: [],
+        walls: [],
+        cuts: [{ start: { x: 0, y: 1 }, end: { x: 1, y: 1 } }],
+      }],
+    };
+    const horizontalBins: Bin[] = [{
+      binId: 'bin-1',
+      pieces: [
+        { triangles: new Float32Array(9), cells: [{ x: 0, y: 1 }] },
+        { triangles: new Float32Array(9), cells: [{ x: 0, y: 0 }] },
+      ],
+    }];
+
+    expect(previewLayout(horizontalBins, horizontalDesign)
+      .map((piece) => piece.previewOffset)).toEqual([
+      { x: 0, y: 0.15 },
+      { x: 0, y: -0.15 },
+    ]);
   });
 });

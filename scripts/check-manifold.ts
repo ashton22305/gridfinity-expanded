@@ -409,14 +409,18 @@ try {
     bin('top', [{ x: 0, y: 0 }]),
     bin('bottom', [{ x: 0, y: 2 }]),
   ]);
-  const orientationBins = generateGeometry(wasm, buildBinParameters(orientationDesign));
+  const orientationParameters = buildBinParameters(orientationDesign);
+  if (orientationParameters[0].cells[0].y !== 2 || orientationParameters[1].cells[0].y !== 0) {
+    throw new Error('parameter boundary did not mirror the shared occupied Y extent');
+  }
+  const orientationBins = generateGeometry(wasm, orientationParameters);
   const minY = (triangles: Float32Array) => {
     let value = Number.POSITIVE_INFINITY;
     for (let index = 1; index < triangles.length; index += 3) value = Math.min(value, triangles[index]);
     return value;
   };
-  if (!(minY(orientationBins[1].pieces[0].triangles) > minY(orientationBins[0].pieces[0].triangles))) {
-    throw new Error('geometry did not preserve editor row-down coordinates');
+  if (!(minY(orientationBins[1].pieces[0].triangles) < minY(orientationBins[0].pieces[0].triangles))) {
+    throw new Error('geometry did not preserve mirrored generation coordinates');
   }
   const cutDesign = design([bin('bin-1', wideCells, { cuts: wideCuts })], { printer: smallPrinter });
   const cutBins = generateGeometry(wasm, buildBinParameters(cutDesign));
@@ -425,10 +429,10 @@ try {
   if (previewXs.length < 2 || Math.abs(previewXs[1] - previewXs[0] - 0.3) > 1e-6) {
     throw new Error('multipart preview transforms do not create a 0.3 mm gap');
   }
-  console.log('trusted coordinate/orientation semantics'.padEnd(48) + ' ✓ pass');
+  console.log('mirrored coordinate/orientation semantics'.padEnd(48) + ' ✓ pass');
 } catch (error) {
   failed = true;
-  console.log(`trusted coordinate/orientation semantics`.padEnd(48) + ` ERROR: ${String(error)}`);
+  console.log(`mirrored coordinate/orientation semantics`.padEnd(48) + ` ERROR: ${String(error)}`);
 }
 
 console.log(failed
