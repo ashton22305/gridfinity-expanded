@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import type { Locator } from '@playwright/test';
 
 async function cacheRecordCount(page: Page): Promise<number> {
   return page.evaluate(async () => {
@@ -35,6 +36,29 @@ async function cacheRecordKeys(page: Page): Promise<IDBValidKey[]> {
     database.close();
     return keys;
   });
+}
+
+async function readCanvasPixel(
+  canvas: Locator,
+  xRatio: number,
+  yRatio: number,
+) {
+  return canvas.evaluate((element, { xRatio, yRatio }) => {
+    const target = element as HTMLCanvasElement;
+    const gl = target.getContext('webgl2') ?? target.getContext('webgl');
+    if (!gl) throw new Error('Viewer canvas does not have a WebGL context');
+    const pixel = new Uint8Array(4);
+    gl.readPixels(
+      Math.floor(gl.drawingBufferWidth * xRatio),
+      Math.floor(gl.drawingBufferHeight * yRatio),
+      1,
+      1,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      pixel,
+    );
+    return [...pixel];
+  }, { xRatio, yRatio });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -232,7 +256,7 @@ test('evicts least-recently-used records over the cache size limit', async ({ pa
   expect(await cacheRecordKeys(page)).toContain('newer');
 });
 
-test('keeps selected-bin painting explicit and exposes the simplified controls', async ({ page }) => {
+test('locks each paint gesture to one bin and exposes the simplified controls', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => {
@@ -248,14 +272,30 @@ test('keeps selected-bin painting explicit and exposes the simplified controls',
   await expect(page.getByText('Cavity corner radius', { exact: true })).toHaveCount(0);
   await expect(page.getByText(/Base slope/)).toHaveCount(0);
 
-  await page.getByRole('button', { name: '+ New' }).click();
-  await expect(page.getByRole('button', { name: '+ New' })).toHaveAttribute('aria-pressed', 'true');
-  await page.locator('.cell[aria-pressed="false"]').first().click();
+  await page.getByRole('button', { name: 'Cell 4,0' }).click();
   await expect(page.getByText('5 cells in 2 bins', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Bin 1' }).click();
-  await page.locator('.cell[aria-pressed="false"]').first().click();
+  await expect(page.getByRole('button', { name: 'Bin 2' })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Cell 5,0' }).click();
   await expect(page.getByText('6 cells in 2 bins', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Bin 1' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Bin 2' })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Bin 1' }).click();
+  await page.getByRole('button', { name: 'Cell 6,0' }).click();
+  await expect(page.getByText('7 cells in 3 bins', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Bin 3' })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Bin 1' }).click();
+  const dragStart = await page.getByRole('button', { name: 'Cell 4,2' }).boundingBox();
+  const dragEnd = await page.getByRole('button', { name: 'Cell 5,3' }).boundingBox();
+  expect(dragStart).not.toBeNull();
+  expect(dragEnd).not.toBeNull();
+  await page.mouse.move(dragStart!.x + dragStart!.width / 2, dragStart!.y + dragStart!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(dragEnd!.x + dragEnd!.width / 2, dragEnd!.y + dragEnd!.height / 2);
+  await page.mouse.up();
+  await expect(page.getByText('9 cells in 4 bins', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Bin 4' })).toHaveAttribute('aria-pressed', 'true');
 
   await page.getByRole('tab', { name: 'Walls' }).click();
   await expect(page.getByRole('button', { name: 'Reset selected bin walls' })).toBeVisible();
@@ -341,5 +381,6 @@ test('renders an L-shaped triangle soup in editor orientation and resets the orb
   await page.mouse.up();
   await page.getByRole('button', { name: 'Reset view' }).click();
   await expect(canvas).toBeVisible();
+  await expect.poll(async () => (await readCanvasPixel(canvas, 0.5, 0.02))[0]).toBeLessThan(80);
   expect(errors).toEqual([]);
 });

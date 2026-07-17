@@ -1,11 +1,15 @@
+import { lazy, Suspense } from 'react';
 import { AppShell, Group, Text } from '@mantine/core';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { SettingsPanel } from './components/sidebar/SettingsPanel';
 import { PanelResizeHandle } from './components/sidebar/PanelResizeHandle';
-import { BabylonViewer } from './components/viewer/BabylonViewer';
 import { ExportMenu } from './components/ExportMenu';
 import { useBinGeometry } from './hooks/useBinGeometry';
 import { useAppStore } from './store';
+
+const BabylonViewer = lazy(() => import('./components/viewer/BabylonViewer').then((module) => ({
+  default: module.BabylonViewer,
+})));
 
 export default function App() {
   const design = useAppStore((s) => s.design);
@@ -38,7 +42,15 @@ export default function App() {
         <PanelResizeHandle panel="settings" />
       </AppShell.Aside>
       <AppShell.Main className="app-main">
-        <BabylonViewer bins={bins} design={generatedDesign} error={error} />
+        <Suspense fallback={(
+          <div className="viewer" role="status" aria-label="Loading 3D bin preview">
+            <div className="viewer-overlay">
+              <Text size="sm" c="dimmed">Loading 3D preview…</Text>
+            </div>
+          </div>
+        )}>
+          <BabylonViewer bins={bins} design={generatedDesign} error={error} />
+        </Suspense>
       </AppShell.Main>
     </AppShell>
   );

@@ -237,6 +237,9 @@ const irregular: Cell[] = [
   { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 },
   { x: 0, y: 1 }, { x: 1, y: 1 }, { x: 0, y: 2 },
 ];
+const lShape: Cell[] = [
+  { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 },
+];
 const uShape: Cell[] = [
   { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 },
   { x: 0, y: 1 }, { x: 2, y: 1 },
@@ -279,19 +282,28 @@ const wideCells = rectangle(6, 1);
 const wideCuts = cutsForPrinter(wideCells, smallPrinter);
 const ringCuts = cutsForPrinter(ring, smallPrinter);
 
-const cases: { name: string; value: Design; expectedParts?: number }[] = [
+const cases: {
+  name: string;
+  value: Design;
+  expectedParts?: number;
+  expectsInteriorTop?: boolean;
+}[] = [
   { name: '1x1 default', value: design([bin('bin-1', rectangle(1, 1))]) },
   { name: 'valid irregular', value: design([bin('bin-1', irregular)]) },
+  { name: 'concave perimeter junction', value: design([bin('bin-1', lShape)]) },
   { name: 'valid U-shape', value: design([bin('bin-1', uShape)]) },
   { name: 'valid ring with hole', value: design([bin('bin-1', ring)]) },
   { name: 'outer opening', value: design([bin('bin-1', rectangle(2, 2), { openings: [h(0, 0)] })]) },
   { name: 'hole opening', value: design([bin('bin-1', ring, { openings: [v(1, 1)] })]) },
   { name: 'full-height wall', value: design([bin('bin-1', rectangle(2, 2), {
     walls: [wall(6, 42, 78, 42, 2)],
-  })]) },
-  { name: 'crossing walls', value: design([bin('bin-1', rectangle(2, 2), {
+  })]), expectsInteriorTop: true },
+  { name: 'T-shaped wall junction', value: design([bin('bin-1', rectangle(2, 2), {
+    walls: [wall(5, 42, 79, 42, 2), wall(42, 5, 42, 42, 2)],
+  })]), expectsInteriorTop: true },
+  { name: 'cross-shaped wall junction', value: design([bin('bin-1', rectangle(2, 2), {
     walls: [wall(5, 21, 79, 21), wall(42, 5, 42, 79, 2)],
-  })]) },
+  })]), expectsInteriorTop: true },
   { name: 'magnet and M3 recesses', value: design([bin('bin-1', rectangle(2, 2))], {
     fasteners: { magnets: true, m3: true },
   }) },
@@ -333,12 +345,21 @@ for (const fixture of cases) {
       let minZ = Number.POSITIVE_INFINITY;
       let maxZ = Number.NEGATIVE_INFINITY;
       let horizontalTransitionFaces = 0;
+      let interiorTopFaces = 0;
       const floorZ = GRIDFINITY_SPEC.baseHeight + GRIDFINITY_SPEC.floorThickness;
       const transitionTop = floorZ + filletRadius;
       for (let index = 0; index < part.triangles.length; index += 9) {
         const z = [part.triangles[index + 2], part.triangles[index + 5], part.triangles[index + 8]];
         minZ = Math.min(minZ, ...z);
         maxZ = Math.max(maxZ, ...z);
+        const xMid = (part.triangles[index] + part.triangles[index + 3] +
+          part.triangles[index + 6]) / 3;
+        const yMid = (part.triangles[index + 1] + part.triangles[index + 4] +
+          part.triangles[index + 7]) / 3;
+        if (z.every((value) => Math.abs(value - height) < 1e-4) &&
+            xMid > 5 && xMid < 79 && yMid > 5 && yMid < 79) {
+          interiorTopFaces++;
+        }
         const zMid = (z[0] + z[1] + z[2]) / 3;
         if (zMid <= floorZ + 1e-4 || zMid >= transitionTop - 1e-4) continue;
         const [a, b, c] = [index, index + 3, index + 6];
@@ -360,17 +381,19 @@ for (const fixture of cases) {
       }
       const coordinateError = Math.abs(minZ) > 1e-4 ||
         Math.abs(maxZ - height) > 1e-3;
-      const defective = report.triangles === 0 ||
+      const topologyDefective = report.triangles === 0 ||
         report.degenerate || report.boundaryEdges || report.nonManifoldEdges ||
         report.orientationErrors || report.duplicateFaces || report.coincidentFaces || report.membranes ||
         serialized.boundary || serialized.nonManifold || coordinateError || horizontalTransitionFaces;
+      const semanticError = fixture.expectsInteriorTop && interiorTopFaces === 0;
+      const defective = topologyDefective || semanticError;
       if (defective) failed = true;
       console.log(
         `${`${fixture.name} [part ${partIndex + 1}]`.padEnd(48)} tris=${String(report.triangles).padStart(6)} ` +
         `boundary=${report.boundaryEdges} nonManifold=${report.nonManifoldEdges} ` +
         `orient=${report.orientationErrors} degen=${report.degenerate} ` +
         `dup=${report.duplicateFaces} coincident=${report.coincidentFaces} membrane=${report.membranes} ` +
-        `flatFillet=${horizontalTransitionFaces} ` +
+        `flatFillet=${horizontalTransitionFaces} interiorTop=${interiorTopFaces} ` +
         `stl(bnd=${serialized.boundary},nm=${serialized.nonManifold}) coords=${coordinateError ? 'bad' : 'global'} ` +
         (defective ? '✗ DEFECTIVE' : '✓ clean'),
       );

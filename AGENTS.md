@@ -70,4 +70,4 @@ Use `--body-file` for multiline `gh` pull-request bodies and comments. Do not em
 
 ## Known Limitations
 
-STL is the only wired export format. Babylon.js imports are broad and may be optimized later if bundle size becomes a priority.
+STL is the only wired export format.
