@@ -1,7 +1,9 @@
-import { GRID_PITCH } from '../../lib/geometry/gridfinity';
+import { GRIDFINITY_SPEC } from '../../lib/gridfinitySpec';
 
-// The coordinate system for the Walls and Split SVG editors, in one place so
-// every overlay (grid, cells, edges, split lines, custom walls) maps the same
+const GRID_PITCH = GRIDFINITY_SPEC.gridPitch;
+
+// The coordinate system for the Walls and Cuts SVG editors, in one place so
+// every overlay (grid, cells, edges, cuts, custom walls) maps the same
 // way — changing CELL/PAD (zoom, larger padding) can never desync one of them.
 
 /** SVG units per grid cell / canvas padding. */

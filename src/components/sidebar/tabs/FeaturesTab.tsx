@@ -1,24 +1,27 @@
 import { Stack, Switch } from '@mantine/core';
+import { GRIDFINITY_SPEC } from '../../../lib/gridfinitySpec';
 import { useAppStore } from '../../../store';
 import { Label } from '../../ui/Field';
 
 export function FeaturesTab() {
-  const { config, updateConfig } = useAppStore();
+  const fasteners = useAppStore((state) => state.design.fasteners);
+  const setFasteners = useAppStore((state) => state.setFasteners);
+  const magnet = GRIDFINITY_SPEC.hardware.magnet;
 
   return (
     <Stack gap="sm">
       <Label>Base attachment</Label>
       <Switch
-        label="Magnet holes"
-        description="6.5 mm × 2.4 mm recesses for N52 disc magnets (4 per cell)"
-        checked={config.magnetHoles}
-        onChange={(e) => updateConfig({ magnetHoles: e.currentTarget.checked })}
+        label="Magnet recesses"
+        description={`${magnet.recessDiameter} mm × ${magnet.recessDepth} mm, four per cell`}
+        checked={fasteners.magnets}
+        onChange={(event) => setFasteners({ magnets: event.currentTarget.checked })}
       />
       <Switch
-        label="Screw holes"
-        description="M3 pilot holes inside each magnet recess for mechanical lock"
-        checked={config.screwHoles}
-        onChange={(e) => updateConfig({ screwHoles: e.currentTarget.checked })}
+        label="M3 recesses"
+        description="M3 pilot recesses inside the same four base positions"
+        checked={fasteners.m3}
+        onChange={(event) => setFasteners({ m3: event.currentTarget.checked })}
       />
     </Stack>
   );

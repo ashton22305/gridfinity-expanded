@@ -2,16 +2,16 @@ import { useState } from 'react';
 import { ScrollArea, Tabs } from '@mantine/core';
 import { ShapeTab } from './tabs/ShapeTab';
 import { WallsTab } from './tabs/WallsTab';
-import { SplitTab } from './tabs/SplitTab';
+import { CutsTab } from './tabs/CutsTab';
 
 /**
- * The left sidebar's tabs: the spatial cell/edge/split-line editors.
+ * The left sidebar's tabs: the spatial cell, wall, and cut editors.
  * Form-shaped parameter groups live in `SECTIONS` in SettingsPanel.tsx.
  */
 const TABS = {
   Shape: ShapeTab,
   Walls: WallsTab,
-  Split: SplitTab,
+  Cuts: CutsTab,
 } as const;
 
 type Tab = keyof typeof TABS;

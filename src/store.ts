@@ -1,139 +1,336 @@
 import { create } from 'zustand';
-import type { BinConfig, GridCell, LogicalBin, PrinterProfile, SplitLine } from './lib/types';
-import { PRINTER_PROFILES, computeAutoSplitLines } from './lib/printers';
-import { flattenBins, sortSplitLines } from './lib/split';
+import { availableCuts, cutKey, partitionCells, sortCuts, toggleCut } from './lib/cuts';
+import { cellKey, classifyEdge, edgeKey, perimeterEdges, sortEdges } from './lib/edges';
+import { DESIGN_DEFAULTS } from './lib/gridfinitySpec';
+import { PRINTER_PROFILES, checkBedFit, cutsForPrinter } from './lib/printers';
+import type {
+  BinDesign,
+  Cell,
+  Cut,
+  Design,
+  Edge,
+  FastenerSettings,
+  PrinterSettings,
+  Wall,
+} from './lib/types';
 
-const DEFAULT_PRINTER = PRINTER_PROFILES[5]; // Prusa MK4 / MK3S+
+const DEFAULT_PRINTER = PRINTER_PROFILES.find(
+  (printer) => printer.name === DESIGN_DEFAULTS.printerName,
+)!;
 
 export const PANEL_MIN_WIDTH = 220;
 export const PANEL_MAX_WIDTH = 900;
+export const MAX_GRID = 40;
 
-/**
- * The two resizable side panels: `sidebar` (left — the Shape/Walls/Split
- * editors) and `settings` (right — the Dimensions/Features/Printer forms).
- */
 export type PanelSide = 'sidebar' | 'settings';
 
-/**
- * Defaults leave the viewer ~2/3 of a 1080p-class window: the sidebar only
- * needs to host the cell editors now that the parameter forms live on the
- * right, and the settings forms read fine at roughly control width.
- */
 const DEFAULT_PANEL_WIDTHS: Record<PanelSide, number> = {
   sidebar: 360,
   settings: 300,
 };
 
-/** Editor grid bounds (cells). The minimum also grows to cover the painted shape. */
-export const MAX_GRID = 40;
+function sortCells(cells: Cell[]): Cell[] {
+  return [...cells].sort((a, b) => a.y - b.y || a.x - b.x);
+}
 
-export function minGridSize(cells: GridCell[]): { cols: number; rows: number } {
+function emptyBin(id: string): BinDesign {
+  return { id, cells: [], openings: [], walls: [], cuts: [] };
+}
+
+function resetForShape(bin: BinDesign, cells: Cell[], printer: PrinterSettings): BinDesign {
+  const sorted = sortCells(cells);
   return {
-    cols: Math.max(4, ...cells.map((c) => c.x + 1)),
-    rows: Math.max(4, ...cells.map((c) => c.y + 1)),
+    ...bin,
+    cells: sorted,
+    openings: [],
+    walls: [],
+    cuts: cutsForPrinter(sorted, printer),
   };
 }
 
-const DEFAULT_CONFIG: BinConfig = {
+function nextBinId(bins: BinDesign[]): string {
+  const ids = new Set(bins.map((bin) => bin.id));
+  let index = 1;
+  while (ids.has(`bin-${index}`)) index++;
+  return `bin-${index}`;
+}
+
+function cutOrientation(cut: Cut): 'h' | 'v' {
+  return cut.start.x === cut.end.x ? 'v' : 'h';
+}
+
+function cutCenter(cut: Cut): { x: number; y: number } {
+  return {
+    x: (cut.start.x + cut.end.x) / 2,
+    y: (cut.start.y + cut.end.y) / 2,
+  };
+}
+
+function binPartsFit(bin: BinDesign, printer: PrinterSettings): boolean {
+  return partitionCells(bin.cells, bin.cuts)
+    .every((part) => checkBedFit(part.cells, printer).fits);
+}
+
+const initialCells: Cell[] = [
+  { x: 0, y: 0 },
+  { x: 1, y: 0 },
+  { x: 0, y: 1 },
+  { x: 1, y: 1 },
+];
+
+export const DEFAULT_DESIGN: Design = {
   bins: [{
-    id: 0,
-    cells: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: 1, y: 1 }],
-    isManual: false,
-    splitLines: [],
+    ...emptyBin('bin-1'),
+    cells: initialCells,
+    cuts: cutsForPrinter(initialCells, DEFAULT_PRINTER),
   }],
-  heightUnits: 3,
-  wallThickness: 1.2,
-  cavityCornerRadius: 2.5, // ≈ the interior look of the spec 3.75 mm outer corner minus one wall
-  innerFilletRadius: 3.0,
-  magnetHoles: false,
-  screwHoles: false,
-  openEdges: [],
-  dividerEdges: [],
-  innerWalls: [],
+  heightUnits: DESIGN_DEFAULTS.heightUnits,
+  perimeterThickness: DESIGN_DEFAULTS.perimeterThickness,
+  filletRadius: DESIGN_DEFAULTS.filletRadius,
+  fasteners: { ...DESIGN_DEFAULTS.fasteners },
+  printer: { ...DEFAULT_PRINTER },
 };
 
-function sameSplitLines(a: SplitLine[], b: SplitLine[]): boolean {
-  return a.length === b.length &&
-    a.every((l, i) => l.axis === b[i].axis && l.index === b[i].index);
-}
-
-/** Keep one bin's effective lines current while preserving object identity on no-ops. */
-function withEffectiveSplit(bin: LogicalBin, printer: PrinterProfile): LogicalBin {
-  const lines = bin.isManual
-    ? bin.splitLines.filter((line) => {
-        const coords = bin.cells.map((cell) => line.axis === 'x' ? cell.x : cell.y);
-        return coords.some((coord) => coord < line.index) && coords.some((coord) => coord >= line.index);
-      })
-    : computeAutoSplitLines(bin.cells, printer);
-  return sameSplitLines(lines, bin.splitLines) ? bin : { ...bin, splitLines: lines };
-}
-
-/** Re-derive every bin after a printer change or whole-shape replacement. */
-function withAutoSplit(config: BinConfig, printer: PrinterProfile): BinConfig {
-  const bins = config.bins.map((bin) => withEffectiveSplit(bin, printer));
-  const changed = bins.some((bin, i) => bin !== config.bins[i]);
-  return changed ? { ...config, bins } : config;
+export function minGridSize(cells: Cell[]): { cols: number; rows: number } {
+  return {
+    cols: Math.max(4, ...cells.map((cell) => cell.x + 1)),
+    rows: Math.max(4, ...cells.map((cell) => cell.y + 1)),
+  };
 }
 
 interface AppState {
-  config: BinConfig;
-  printer: PrinterProfile;
-  /** Editor canvas size in cells — purely a UI concern, not part of the geometry config. */
+  design: Design;
+  selectedBinId: string;
   gridCols: number;
   gridRows: number;
-  /** Side panel widths in px — purely a UI concern, not part of the geometry config. */
   panelWidths: Record<PanelSide, number>;
-  updateConfig: (patch: Partial<BinConfig>) => void;
-  updateBin: (id: number, patch: Partial<LogicalBin>) => void;
-  setPrinter: (printer: PrinterProfile) => void;
+  selectBin: (id: string) => void;
+  startNewBin: () => void;
+  paintCell: (cell: Cell) => void;
+  removeSelectedCell: (cell: Cell) => void;
+  setHeightUnits: (heightUnits: number) => void;
+  setPerimeterThickness: (perimeterThickness: number) => void;
+  setFilletRadius: (filletRadius: number) => void;
+  setFasteners: (patch: Partial<FastenerSettings>) => void;
+  setPrinter: (printer: PrinterSettings) => void;
+  setOpeningState: (edges: Edge[], open: boolean) => void;
+  toggleOpening: (edge: Edge) => void;
+  resetSelectedWalls: () => void;
+  addWall: (wall: Wall) => void;
+  updateWall: (index: number, patch: Partial<Wall>) => void;
+  removeWall: (index: number) => void;
+  toggleCut: (binId: string, cut: Cut) => void;
+  moveCut: (binId: string, index: number, direction: -1 | 1) => void;
+  resetCuts: (binId: string) => void;
   setGridSize: (cols: number, rows: number) => void;
   setPanelWidth: (panel: PanelSide, width: number) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  config: withAutoSplit(DEFAULT_CONFIG, DEFAULT_PRINTER),
-  printer: DEFAULT_PRINTER,
+  design: DEFAULT_DESIGN,
+  selectedBinId: DEFAULT_DESIGN.bins[0].id,
   gridCols: 7,
   gridRows: 7,
   panelWidths: DEFAULT_PANEL_WIDTHS,
 
-  updateConfig: (patch) =>
-    set((s) => {
-      const config = { ...s.config, ...patch };
-      return { config: patch.bins ? withAutoSplit(config, s.printer) : config };
-    }),
+  selectBin: (id) => set({ selectedBinId: id }),
 
-  updateBin: (id, patch) =>
-    set((s) => {
-      const bins = s.config.bins.map((bin) => {
-        if (bin.id !== id) return bin;
-        const updated = {
-          ...bin,
-          ...patch,
-          splitLines: patch.splitLines ? sortSplitLines(patch.splitLines) : bin.splitLines,
-        };
-        return withEffectiveSplit(updated, s.printer);
-      });
-      return { config: { ...s.config, bins } };
-    }),
+  startNewBin: () => set((state) => ({ selectedBinId: nextBinId(state.design.bins) })),
 
-  setPrinter: (printer) =>
-    set((s) => ({ printer, config: withAutoSplit(s.config, printer) })),
+  paintCell: (cell) => set((state) => {
+    const key = cellKey(cell);
+    const selectedId = state.selectedBinId;
+    const owner = state.design.bins.find((bin) => bin.cells.some((value) => cellKey(value) === key));
+    if (owner?.id === selectedId) return state;
 
-  setGridSize: (cols, rows) =>
-    set((s) => {
-      const min = minGridSize(flattenBins(s.config.bins));
-      return {
-        gridCols: Math.min(MAX_GRID, Math.max(min.cols, Math.round(cols))),
-        gridRows: Math.min(MAX_GRID, Math.max(min.rows, Math.round(rows))),
-      };
-    }),
+    const bins = state.design.bins
+      .map((bin) => {
+        if (bin.id === owner?.id) {
+          return resetForShape(bin, bin.cells.filter((value) => cellKey(value) !== key), state.design.printer);
+        }
+        if (bin.id === selectedId) {
+          return resetForShape(bin, [...bin.cells, cell], state.design.printer);
+        }
+        return bin;
+      })
+      .filter((bin) => bin.cells.length > 0);
+    if (!bins.some((bin) => bin.id === selectedId)) {
+      bins.push(resetForShape(emptyBin(selectedId), [cell], state.design.printer));
+    }
+    return { design: { ...state.design, bins } };
+  }),
 
-  setPanelWidth: (panel, width) =>
-    set((s) => ({
-      panelWidths: {
-        ...s.panelWidths,
-        [panel]: Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, Math.round(width))),
+  removeSelectedCell: (cell) => set((state) => {
+    const key = cellKey(cell);
+    const bins = state.design.bins
+      .map((bin) => bin.id === state.selectedBinId
+        ? resetForShape(bin, bin.cells.filter((value) => cellKey(value) !== key), state.design.printer)
+        : bin)
+      .filter((bin) => bin.cells.length > 0);
+    return { design: { ...state.design, bins } };
+  }),
+
+  setHeightUnits: (heightUnits) => set((state) => ({
+    design: { ...state.design, heightUnits },
+  })),
+
+  setPerimeterThickness: (perimeterThickness) => set((state) => ({
+    design: { ...state.design, perimeterThickness },
+  })),
+
+  setFilletRadius: (filletRadius) => set((state) => ({
+    design: { ...state.design, filletRadius },
+  })),
+
+  setFasteners: (patch) => set((state) => ({
+    design: { ...state.design, fasteners: { ...state.design.fasteners, ...patch } },
+  })),
+
+  setPrinter: (printer) => set((state) => ({
+    design: {
+      ...state.design,
+      printer,
+      bins: state.design.bins.map((bin) => binPartsFit(bin, printer)
+        ? bin
+        : { ...bin, cuts: cutsForPrinter(bin.cells, printer, bin.cuts) }),
+    },
+  })),
+
+  setOpeningState: (edges, open) => set((state) => ({
+    design: {
+      ...state.design,
+      bins: state.design.bins.map((bin) => {
+        const setOfCells = new Set(bin.cells.map(cellKey));
+        const relevant = edges.filter((edge) => classifyEdge(setOfCells, edge) === 'perimeter');
+        if (relevant.length === 0) return bin;
+        const relevantKeys = new Set(relevant.map(edgeKey));
+        const openings = open
+          ? sortEdges([...bin.openings.filter((edge) => !relevantKeys.has(edgeKey(edge))), ...relevant])
+          : bin.openings.filter((edge) => !relevantKeys.has(edgeKey(edge)));
+        return { ...bin, openings };
+      }),
+    },
+  })),
+
+  toggleOpening: (edge) => set((state) => {
+    const bordering = state.design.bins.filter((bin) =>
+      classifyEdge(new Set(bin.cells.map(cellKey)), edge) === 'perimeter');
+    const shouldOpen = bordering.some((bin) => !bin.openings.some((value) => edgeKey(value) === edgeKey(edge)));
+    return {
+      design: {
+        ...state.design,
+        bins: state.design.bins.map((bin) => {
+          if (!bordering.some((value) => value.id === bin.id)) return bin;
+          const without = bin.openings.filter((value) => edgeKey(value) !== edgeKey(edge));
+          return { ...bin, openings: shouldOpen ? sortEdges([...without, edge]) : without };
+        }),
       },
-    })),
+    };
+  }),
+
+  resetSelectedWalls: () => set((state) => {
+    const selected = state.design.bins.find((bin) => bin.id === state.selectedBinId);
+    if (!selected) return state;
+    const perimeterKeys = new Set(perimeterEdges(selected.cells).map(edgeKey));
+    return {
+      design: {
+        ...state.design,
+        bins: state.design.bins.map((bin) => ({
+          ...bin,
+          openings: bin.openings.filter((edge) => !perimeterKeys.has(edgeKey(edge))),
+          walls: bin.id === selected.id ? [] : bin.walls,
+        })),
+      },
+    };
+  }),
+
+  addWall: (wall) => set((state) => ({
+    design: {
+      ...state.design,
+      bins: state.design.bins.map((bin) => bin.id === state.selectedBinId
+        ? { ...bin, walls: [...bin.walls, wall] }
+        : bin),
+    },
+  })),
+
+  updateWall: (index, patch) => set((state) => ({
+    design: {
+      ...state.design,
+      bins: state.design.bins.map((bin) => bin.id === state.selectedBinId
+        ? { ...bin, walls: bin.walls.map((wall, wallIndex) =>
+          wallIndex === index ? { ...wall, ...patch } : wall) }
+        : bin),
+    },
+  })),
+
+  removeWall: (index) => set((state) => ({
+    design: {
+      ...state.design,
+      bins: state.design.bins.map((bin) => bin.id === state.selectedBinId
+        ? { ...bin, walls: bin.walls.filter((_, wallIndex) => wallIndex !== index) }
+        : bin),
+    },
+  })),
+
+  toggleCut: (binId, cut) => set((state) => ({
+    design: {
+      ...state.design,
+      bins: state.design.bins.map((bin) => bin.id === binId
+        ? { ...bin, cuts: toggleCut(bin.cuts, cut) }
+        : bin),
+    },
+  })),
+
+  moveCut: (binId, index, direction) => set((state) => ({
+    design: {
+      ...state.design,
+      bins: state.design.bins.map((bin) => {
+        if (bin.id !== binId || !bin.cuts[index]) return bin;
+        const current = bin.cuts[index];
+        const center = cutCenter(current);
+        const candidates = availableCuts(bin.cells)
+          .filter((cut) => cutOrientation(cut) === cutOrientation(current));
+        if (candidates.length === 0) return bin;
+        let candidateIndex = candidates.findIndex((cut) => cutKey(cut) === cutKey(current));
+        if (candidateIndex < 0) {
+          candidateIndex = candidates.reduce((best, cut, valueIndex) => {
+            const point = cutCenter(cut);
+            const bestPoint = cutCenter(candidates[best]);
+            return Math.hypot(point.x - center.x, point.y - center.y) <
+              Math.hypot(bestPoint.x - center.x, bestPoint.y - center.y)
+              ? valueIndex : best;
+          }, 0);
+        }
+        const nextIndex = Math.max(0, Math.min(candidates.length - 1, candidateIndex + direction));
+        if (nextIndex === candidateIndex) return bin;
+        const cuts = bin.cuts.filter((_, cutIndex) => cutIndex !== index);
+        return { ...bin, cuts: sortCuts([...cuts, candidates[nextIndex]]) };
+      }),
+    },
+  })),
+
+  resetCuts: (binId) => set((state) => ({
+    design: {
+      ...state.design,
+      bins: state.design.bins.map((bin) => bin.id === binId
+        ? { ...bin, cuts: cutsForPrinter(bin.cells, state.design.printer) }
+        : bin),
+    },
+  })),
+
+  setGridSize: (cols, rows) => set((state) => {
+    const cells = state.design.bins.flatMap((bin) => bin.cells);
+    const min = minGridSize(cells);
+    return {
+      gridCols: Math.min(MAX_GRID, Math.max(min.cols, Math.round(cols))),
+      gridRows: Math.min(MAX_GRID, Math.max(min.rows, Math.round(rows))),
+    };
+  }),
+
+  setPanelWidth: (panel, width) => set((state) => ({
+    panelWidths: {
+      ...state.panelWidths,
+      [panel]: Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, Math.round(width))),
+    },
+  })),
 }));

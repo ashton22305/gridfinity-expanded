@@ -1,8 +1,4 @@
-export function downloadBuffer(
-  buffer: ArrayBuffer,
-  filename: string,
-  mimeType: string
-): void {
+export function downloadBuffer(buffer: ArrayBuffer, filename: string, mimeType: string): void {
   const blob = new Blob([buffer], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -12,41 +8,43 @@ export function downloadBuffer(
   URL.revokeObjectURL(url);
 }
 
-export function downloadStl(buffer: ArrayBuffer, filename = 'gridfinity-bin.stl'): void {
-  downloadBuffer(buffer, filename, 'model/stl');
-}
-
-/**
- * Serializes an indexed triangle mesh (as produced by the manifold engine) to
- * binary STL. Per-facet normals are computed from the winding so the file is
- * self-describing for slicers.
- */
-export function meshToStl(vertProperties: Float32Array, triVerts: Uint32Array): ArrayBuffer {
-  const triCount = triVerts.length / 3;
-  const buffer = new ArrayBuffer(84 + triCount * 50);
+/** Serialize the exact generated triangle soup to binary STL. */
+export function trianglesToStl(triangles: Float32Array): ArrayBuffer {
+  const triangleCount = triangles.length / 9;
+  const buffer = new ArrayBuffer(84 + triangleCount * 50);
   const view = new DataView(buffer);
-  view.setUint32(80, triCount, true);
+  view.setUint32(80, triangleCount, true);
 
   let offset = 84;
-  for (let i = 0; i < triVerts.length; i += 3) {
-    const a = triVerts[i] * 3, b = triVerts[i + 1] * 3, c = triVerts[i + 2] * 3;
-    const ax = vertProperties[a], ay = vertProperties[a + 1], az = vertProperties[a + 2];
-    const bx = vertProperties[b], by = vertProperties[b + 1], bz = vertProperties[b + 2];
-    const cx = vertProperties[c], cy = vertProperties[c + 1], cz = vertProperties[c + 2];
-
+  for (let index = 0; index < triangles.length; index += 9) {
+    const ax = triangles[index], ay = triangles[index + 1], az = triangles[index + 2];
+    const bx = triangles[index + 3], by = triangles[index + 4], bz = triangles[index + 5];
+    const cx = triangles[index + 6], cy = triangles[index + 7], cz = triangles[index + 8];
     const ux = bx - ax, uy = by - ay, uz = bz - az;
     const vx = cx - ax, vy = cy - ay, vz = cz - az;
-    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-    const len = Math.hypot(nx, ny, nz) || 1;
-    nx /= len; ny /= len; nz /= len;
+    let nx = uy * vz - uz * vy;
+    let ny = uz * vx - ux * vz;
+    let nz = ux * vy - uy * vx;
+    const length = Math.hypot(nx, ny, nz);
+    nx /= length;
+    ny /= length;
+    nz /= length;
 
-    view.setFloat32(offset, nx, true);      view.setFloat32(offset + 4, ny, true);  view.setFloat32(offset + 8, nz, true);
-    view.setFloat32(offset + 12, ax, true); view.setFloat32(offset + 16, ay, true); view.setFloat32(offset + 20, az, true);
-    view.setFloat32(offset + 24, bx, true); view.setFloat32(offset + 28, by, true); view.setFloat32(offset + 32, bz, true);
-    view.setFloat32(offset + 36, cx, true); view.setFloat32(offset + 40, cy, true); view.setFloat32(offset + 44, cz, true);
-    offset += 48;
-    view.setUint16(offset, 0, true);  // attribute byte count
-    offset += 2;
+    view.setFloat32(offset, nx, true);
+    view.setFloat32(offset + 4, ny, true);
+    view.setFloat32(offset + 8, nz, true);
+    for (let vertex = 0; vertex < 9; vertex++) {
+      view.setFloat32(offset + 12 + vertex * 4, triangles[index + vertex], true);
+    }
+    view.setUint16(offset + 48, 0, true);
+    offset += 50;
   }
   return buffer;
+}
+
+export function downloadStl(
+  triangles: Float32Array,
+  filename = 'gridfinity-bin.stl',
+): void {
+  downloadBuffer(trianglesToStl(triangles), filename, 'model/stl');
 }

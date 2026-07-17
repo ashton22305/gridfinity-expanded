@@ -1,84 +1,117 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { BinConfig } from '../lib/types';
+import { buildBinParameters } from '../lib/binParameters';
+import type {
+  Bin,
+  Design,
+  GenerateGeometryRequest,
+  GenerateGeometryResponse,
+} from '../lib/types';
 
-const DEBOUNCE_MS = 1000;
+const DEBOUNCE_MS = 300;
+const MAX_POOL_SIZE = 4;
 
-export interface PieceStl {
-  name: string;
-  buffer: ArrayBuffer;
-}
-
-export interface PreviewStl {
-  bin: number;
-  buffer: ArrayBuffer;
-}
-
-interface GeometryState {
-  previews: PreviewStl[];
-  pieces: PieceStl[];
+export interface GeometryState {
+  bins: Bin[];
+  /** The design snapshot that produced `bins`, for viewer layout. */
+  design: Design | null;
   generating: boolean;
   error: string | null;
 }
 
-type WorkerResult =
-  | { ok: true; previews: PreviewStl[]; pieces: PieceStl[]; requestId: number }
-  | { ok: false; error: string; requestId: number };
+interface PendingGeneration {
+  revision: number;
+  design: Design;
+  /** Posted bin order; gathered results are reassembled to match. */
+  binIds: string[];
+  binsById: Map<string, Bin>;
+  remaining: number;
+}
 
-export function useBinGeometry(config: BinConfig): GeometryState {
+function poolSize(): number {
+  return Math.min(MAX_POOL_SIZE, Math.max(1, (navigator.hardwareConcurrency ?? 2) - 1));
+}
+
+export function useBinGeometry(design: Design): GeometryState {
   const [state, setState] = useState<GeometryState>({
-    previews: [],
-    pieces: [],
+    bins: [],
+    design: null,
     generating: false,
     error: null,
   });
-
-  // JSON key gates the effect so it only re-fires when config actually changes value.
-  const configKey = useMemo(() => JSON.stringify(config), [config]);
-  const workerRef = useRef<Worker | null>(null);
-  const requestIdRef = useRef(0);
+  const parameters = useMemo(() => buildBinParameters(design), [design]);
+  const workersRef = useRef<Worker[]>([]);
+  const revisionRef = useRef(0);
+  const pendingRef = useRef<PendingGeneration | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // One long-lived worker reused across config changes, instead of re-spawning
-  // (and re-paying module bootstrap cost) on every debounced edit.
   useEffect(() => {
-    const worker = new Worker(
-      new URL('../workers/geometry.worker.ts', import.meta.url),
-      { type: 'module' },
-    );
-    workerRef.current = worker;
-
-    worker.onmessage = (e: MessageEvent<WorkerResult>) => {
-      const data = e.data;
-      if (data.requestId !== requestIdRef.current) return; // superseded — discard stale result
-      if (data.ok) {
-        setState({ previews: data.previews, pieces: data.pieces,
-          generating: false, error: null });
-      } else {
-        setState((s) => ({ ...s, generating: false, error: data.error }));
-      }
+    const fail = () => {
+      pendingRef.current = null;
+      setState((current) => ({
+        ...current,
+        generating: false,
+        error: 'Geometry generation failed.',
+      }));
     };
-
-    worker.onerror = () => {
-      setState((s) => ({ ...s, generating: false, error: 'Geometry worker failed to load.' }));
-    };
-
-    return () => worker.terminate();
+    const workers = Array.from({ length: poolSize() }, () => {
+      const worker = new Worker(
+        new URL('../workers/geometry.worker.ts', import.meta.url),
+        { type: 'module' },
+      );
+      worker.onmessage = (event: MessageEvent<GenerateGeometryResponse>) => {
+        const response = event.data;
+        const pending = pendingRef.current;
+        if (response.revision !== revisionRef.current || pending?.revision !== response.revision) {
+          return;
+        }
+        if (!response.ok) {
+          fail();
+          return;
+        }
+        for (const bin of response.bins) pending.binsById.set(bin.binId, bin);
+        pending.remaining -= 1;
+        if (pending.remaining > 0) return;
+        pendingRef.current = null;
+        setState({
+          bins: pending.binIds.map((binId) => pending.binsById.get(binId)!),
+          design: pending.design,
+          generating: false,
+          error: null,
+        });
+      };
+      worker.onerror = fail;
+      return worker;
+    });
+    workersRef.current = workers;
+    return () => workers.forEach((worker) => worker.terminate());
   }, []);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-
     debounceRef.current = setTimeout(() => {
-      const requestId = ++requestIdRef.current;
-      setState((s) => ({ ...s, generating: true, error: null }));
-      workerRef.current?.postMessage({ config, requestId });
+      const revision = ++revisionRef.current;
+      pendingRef.current = {
+        revision,
+        design,
+        binIds: parameters.map((bin) => bin.binId),
+        binsById: new Map(),
+        remaining: parameters.length,
+      };
+      setState((current) => ({ ...current, generating: true, error: null }));
+      const workers = workersRef.current;
+      parameters.forEach((bin, index) => {
+        const request: GenerateGeometryRequest = { revision, bins: [bin] };
+        workers[index % workers.length]?.postMessage(request);
+      });
+      if (parameters.length === 0) {
+        pendingRef.current = null;
+        setState({ bins: [], design, generating: false, error: null });
+      }
     }, DEBOUNCE_MS);
-
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configKey]);
+  }, [design, parameters]);
 
   return state;
 }

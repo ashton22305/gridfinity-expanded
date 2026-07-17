@@ -10,9 +10,9 @@ Keep changes narrowly scoped, preserve unrelated working-tree changes, and inspe
 
 ## Project Structure
 
-`src/main.tsx` mounts the app, `src/App.tsx` defines the Mantine AppShell, `src/store.ts` owns Zustand state, and `src/theme.ts` centralizes Mantine defaults. Domain logic is in `src/lib/`: shared contracts in `types.ts`, edge helpers in `edges.ts`, split logic in `split.ts`, printer fit in `printers.ts`, geometry in `geometry/`, and STL serialization in `export/stl.ts`.
+`src/main.tsx` mounts the app, `src/App.tsx` defines the Mantine AppShell, `src/store.ts` owns Zustand state and explicit design commands, and `src/theme.ts` centralizes Mantine defaults. Domain logic is in `src/lib/`: shared contracts in `types.ts`, normative dimensions in `gridfinitySpec.ts`, per-bin worker-input derivation in `binParameters.ts`, viewer-branch preview layout in `preview.ts`, edge helpers in `edges.ts`, editable cut planning in `cuts.ts`, printer fit in `printers.ts`, geometry in `geometry/`, printable-object splitting and naming in `export/printableObjects.ts`, and STL serialization in `export/stl.ts`.
 
-Geometry runs in `src/workers/geometry.worker.ts`, driven by `src/hooks/useBinGeometry.ts`. UI components live under `src/components/`; the left panel contains the Shape, Walls, and Split spatial editors, the right panel contains Printer, Dimensions, and Features settings, and `BabylonViewer.tsx` presents generated STL buffers. Validation scripts are in `scripts/`; Vitest files live beside source as `*.test.ts`; browser tests live in `e2e/`. Developer documentation for the geometry pipeline and Babylon viewer lives in `docs/`; see `docs/README.md`.
+Geometry runs in `src/workers/geometry.worker.ts`, driven by `src/hooks/useBinGeometry.ts`. UI components live under `src/components/`; the left panel contains the Shape, Walls, and Cuts spatial editors, the right panel contains Printer, Dimensions, and Features settings, and `BabylonViewer.tsx` renders generated triangle meshes directly. Validation scripts are in `scripts/`; Vitest files live beside source as `*.test.ts`; browser tests live in `e2e/`. [`docs/geometry-pipeline.md`](./docs/geometry-pipeline.md) is the canonical specification and architecture record.
 
 ## Implementation Rules
 
@@ -20,15 +20,15 @@ Use TypeScript ES modules, React function components, and two-space indentation.
 
 Use Mantine controls and layout primitives before custom UI. Put cross-app control styling in `src/theme.ts`, global layout and documented library workarounds in `src/index.css`, and bespoke SVG editor styles in `src/components/sidebar/editor.css`. Avoid fixed design constants in JSX unless a value is genuinely data-driven.
 
-Tabs read and write through `useAppStore()`. Bin-owned state must go through `updateBin()` so automatic split lines remain effective. Keep `BinConfig` plain and structured-clone compatible for worker messages.
+Tabs read and write through explicit `useAppStore()` commands. Keep `Design`, `BinParameters`, `Bin`, and their nested values plain and structured-clone compatible. A shape change resets the changed bin's openings, walls, and cuts before reseeding required cuts. The UI is responsible for only allowing valid parameters — controls constrain their own ranges and dependent values; do not add store clamping or a validation layer between the UI and geometry generation. The UI must derive complete piece groups before invoking geometry. Preview offsets are a viewer-branch concern computed by `previewLayout()` after generation, never worker input or output.
 
-The manifold path (`generateBinPieces()` / `generateBinManifold()`) is the production geometry path. Author geometry with native `manifold-3d` `CrossSection` and `Manifold` operations. Preserve `manifoldMesh()` and final-coordinate `repairMesh()` calls in the export path because they weld vertices and repair float32-degenerate slivers after mesh generation or coordinate transforms.
+`generateGeometry()` is the sole production geometry path. It accepts trusted generation-ready `BinParameters[]`, builds each complete logical bin once, then intersects the finished solid with supplied piece footprints, returning each bin's cut pieces grouped in a `Bin`. The export branch splits those grouped pieces into distinct named `PrintableObject`s via `toPrintableObjects()`. Author geometry with native `manifold-3d` `CrossSection` and `Manifold` operations, exactly — never approximate shape with coarse tolerances or padding, which previously produced terraced fillets. Geometry must not plan cuts, name parts, inspect printers, validate input, verify output manifoldness, normalize coordinates, or localize output; `check:manifold` is the only manifold verifier. `manifoldTriangles()` is the one extraction boundary: it quantizes each finished part to serialized float32 precision with a 1-micron weld and degenerate-facet repair; no other repair exists.
 
-The editors map SVG y downward to mm +y, so generated output is mirrored across Y at the geometry boundary. Do not compensate for orientation in the viewer. Split seam edges are open unless a divider lies on the seam. Combine solids with manifold booleans, use `CrossSection.offset` for inward 2D offsets, feed manifold individually closed primitives, and use a small overlap such as `CSG_EPSILON` where non-identical flush coordinates could create membranes.
+Editor coordinates are model coordinates. The viewer camera, not geometry, is responsible for presenting row-down orientation correctly after the Z-up display rotation. Preview and STL export must consume the identical global-coordinate triangle soup, with multipart preview spacing applied only through viewer transforms. Expand the quantized extraction output so each triangle owns its vertices and flat normal. Combine solids with manifold booleans and use `CrossSection.offset` for inward 2D offsets.
 
-The outer wall follows the Gridfinity profile (41.5 mm top width, 3.75 mm outer radius); `cavityCornerRadius` affects only the cavity. Separate `LogicalBin` entries create separate complete bins. `openEdges` remove perimeter walls, `dividerEdges` add grid-aligned internal walls, and `innerWalls` are free-form mm segments. A missing slope is flat and zero-angle slopes should not be persisted.
+The alpha generator assumes every supplied bin is edge-connected and otherwise valid. Do not add geometry-side component normalization, repair, rejection, fallback behavior, or tests that define disconnected-bin behavior. Enclosed holes remain supported. Full specification, editing, cut, coordinate, and invalid-input rules live in [`docs/geometry-pipeline.md`](./docs/geometry-pipeline.md); future rule changes must update that document and relevant happy-path tests together.
 
-When changing the geometry pipeline (`src/lib/geometry/`, `src/workers/geometry.worker.ts`, `src/hooks/useBinGeometry.ts`, `src/lib/split.ts`, `src/lib/edges.ts`) or the Babylon viewer (`src/components/viewer/BabylonViewer.tsx`), update the matching document in `docs/` in the same change.
+When changing the geometry pipeline (`src/lib/geometry/`, `src/workers/geometry.worker.ts`, `src/hooks/useBinGeometry.ts`, `src/lib/binParameters.ts`, `src/lib/preview.ts`, `src/lib/export/printableObjects.ts`, `src/lib/cuts.ts`, `src/lib/gridfinitySpec.ts`, `src/lib/edges.ts`) or the Babylon viewer (`src/components/viewer/BabylonViewer.tsx`), update the matching document in `docs/` in the same change.
 
 ## Validation and Completion
 
@@ -41,9 +41,9 @@ Available commands:
 - `npm run test:e2e`: run the Chromium Playwright smoke suite.
 - `npm run classify:changes -- <base> <head>`: classify revision changes for CI gates.
 
-Run lint and the production build for every non-trivial code change. Do not add new Vitest coverage by default during rapid feature development. Run existing Vitest tests locally when changing printer behavior or mesh-validation behavior already covered by the suite; CI always runs the complete suite.
+Run lint and the production build for every non-trivial code change. Do not add new Vitest coverage by default during rapid feature development. Run existing Vitest tests locally when changing printer, cut-to-part, or export behavior already covered by the suite; CI always runs the complete suite.
 
-Run `check:manifold` for every print-affecting change, including geometry, split-piece generation, STL serialization, walls, slopes, fasteners, worker generation, and configuration consumed by geometry. Manifold validation is the printability gate.
+Run `check:manifold` for every print-affecting change, including geometry, cut/part generation, STL serialization, walls, fasteners, worker generation, and configuration consumed by geometry. Manifold validation is the printability gate.
 
 Use Playwright for every browser-visible change. If Playwright is unavailable locally, equivalent manual browser verification is acceptable, but the final report must name the method used. CI has no manual fallback: when path classification requires Playwright, a browser-test failure is a failed check.
 
@@ -54,7 +54,7 @@ A task is complete only when required commands have finished with confirmed succ
 CI always runs lint, Vitest, and the production build. The repository classifier conditionally enables additional gates with a broad, fail-safe mapping:
 
 - Runtime UI, application entrypoints, styles, store, hooks, workers, shared types, dependencies, and build configuration require Playwright.
-- Geometry, split generation, STL export, geometry workers, and geometry-consumed configuration require manifold validation.
+- Geometry, cut/part generation, STL export, geometry workers, and geometry-consumed configuration require manifold validation.
 - Ambiguous shared runtime files require both.
 - Documentation-only and isolated test-only changes require neither additional gate.
 

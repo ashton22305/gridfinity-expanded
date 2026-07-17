@@ -1,85 +1,64 @@
 import { useState } from 'react';
 import { Button, ColorSwatch, Group, NumberInput, Stack, Text } from '@mantine/core';
+import { flattenBins } from '../../../lib/cuts';
 import { cellKey } from '../../../lib/edges';
-import { GRID_PITCH } from '../../../lib/geometry/gridfinity';
-import { getGridFootprintCells } from '../../../lib/printers';
-import { flattenBins } from '../../../lib/split';
+import { GRIDFINITY_SPEC } from '../../../lib/gridfinitySpec';
+import { footprintCells } from '../../../lib/printers';
 import { MAX_GRID, minGridSize, useAppStore } from '../../../store';
-import { binColor } from '../binColors';
 import { Hint, Label } from '../../ui/Field';
+import { binColor } from '../binColors';
 
-/** Grid gap in px: tighter as the cell count grows so large grids stay legible. */
 function cellGap(cols: number, rows: number): number {
   if (cols > 14 || rows > 14) return 1;
   return cols > 8 ? 2 : 4;
 }
 
-/** Shared width for the compact grid-size number fields. */
 const GRID_SIZE_INPUT_WIDTH = 64;
 
 export function ShapeTab() {
-  const { config, updateConfig, gridCols, gridRows, setGridSize } = useAppStore();
-  const cells = flattenBins(config.bins);
-  const cellBin = new Map(cells.map((c) => [cellKey(c), c.bin]));
-  const bins = config.bins;
-  const [activeBin, setActiveBin] = useState(0);
-
-  // Track pointer-drag state so users can paint by holding the mouse.
+  const design = useAppStore((state) => state.design);
+  const selectedBinId = useAppStore((state) => state.selectedBinId);
+  const gridCols = useAppStore((state) => state.gridCols);
+  const gridRows = useAppStore((state) => state.gridRows);
+  const selectBin = useAppStore((state) => state.selectBin);
+  const startNewBin = useAppStore((state) => state.startNewBin);
+  const paintCell = useAppStore((state) => state.paintCell);
+  const removeSelectedCell = useAppStore((state) => state.removeSelectedCell);
+  const setGridSize = useAppStore((state) => state.setGridSize);
   const [paintMode, setPaintMode] = useState<'add' | 'remove' | null>(null);
 
-  // Bin ids offered for painting: every used id plus one fresh one.
-  const usedIds = bins.map((b) => b.id);
-  const nextId = usedIds.length ? Math.max(...usedIds) + 1 : 0;
-  const paletteIds = [...new Set([...usedIds, Math.min(nextId, 7), activeBin])].sort((a, b) => a - b);
-
-  function assignCell(x: number, y: number) {
-    const key = cellKey({ x, y });
-    if (cellBin.get(key) === activeBin) return;
-    const withoutCell = config.bins
-      .map((bin) => ({ ...bin, cells: bin.cells.filter((c) => cellKey(c) !== key) }))
-      .filter((bin) => bin.cells.length > 0);
-    const target = withoutCell.find((bin) => bin.id === activeBin);
-    const nextBins = target
-      ? withoutCell.map((bin) => bin.id === activeBin ? { ...bin, cells: [...bin.cells, { x, y }] } : bin)
-      : [...withoutCell, { id: activeBin, cells: [{ x, y }], isManual: false, splitLines: [] }];
-    updateConfig({ bins: nextBins.sort((a, b) => a.id - b.id) });
-  }
-
-  function removeCell(x: number, y: number) {
-    const key = cellKey({ x, y });
-    if (!cellBin.has(key)) return;
-    updateConfig({
-      bins: config.bins
-        .map((bin) => ({ ...bin, cells: bin.cells.filter((c) => cellKey(c) !== key) }))
-        .filter((bin) => bin.cells.length > 0),
-    });
-  }
+  const cells = flattenBins(design.bins);
+  const cellBin = new Map(cells.map((cell) => [cellKey(cell), cell.binId]));
+  const selectedExists = design.bins.some((bin) => bin.id === selectedBinId);
 
   function handlePointerDown(x: number, y: number) {
-    if (cellBin.get(cellKey({ x, y })) === activeBin) {
+    const cell = { x, y };
+    if (cellBin.get(cellKey(cell)) === selectedBinId) {
       setPaintMode('remove');
-      removeCell(x, y);
+      removeSelectedCell(cell);
     } else {
       setPaintMode('add');
-      assignCell(x, y);
+      paintCell(cell);
     }
   }
 
   function handlePointerEnter(x: number, y: number) {
-    if (paintMode === 'add') assignCell(x, y);
-    if (paintMode === 'remove') removeCell(x, y);
+    const cell = { x, y };
+    if (paintMode === 'add') paintCell(cell);
+    if (paintMode === 'remove' && cellBin.get(cellKey(cell)) === selectedBinId) {
+      removeSelectedCell(cell);
+    }
   }
 
-  // Delegated cell events: one pair of handlers on the grid container reads the
-  // painted cell from data-attrs, so the up-to-1600 cell buttons carry no
-  // per-cell closures (rebuilt on every paint-drag render otherwise).
-  function cellFromEvent(e: React.PointerEvent): { x: number; y: number } | null {
-    const el = (e.target as HTMLElement).closest<HTMLElement>('[data-cell]');
-    return el ? { x: Number(el.dataset.x), y: Number(el.dataset.y) } : null;
+  function cellFromEvent(event: React.PointerEvent): { x: number; y: number } | null {
+    const element = (event.target as HTMLElement).closest<HTMLElement>('[data-cell]');
+    return element
+      ? { x: Number(element.dataset.x), y: Number(element.dataset.y) }
+      : null;
   }
 
-  const { widthCells, depthCells } = getGridFootprintCells(cells);
-  const min = minGridSize(cells);  // setGridSize clamps; this only feeds the input min attrs
+  const footprint = footprintCells(cells);
+  const min = minGridSize(cells);
 
   return (
     <Stack
@@ -96,7 +75,7 @@ export function ShapeTab() {
           min={min.cols}
           max={MAX_GRID}
           value={gridCols}
-          onChange={(v) => setGridSize(Number(v), gridRows)}
+          onChange={(value) => setGridSize(Number(value), gridRows)}
           aria-label="Grid columns"
         />
         <Text span>×</Text>
@@ -106,34 +85,43 @@ export function ShapeTab() {
           min={min.rows}
           max={MAX_GRID}
           value={gridRows}
-          onChange={(v) => setGridSize(gridCols, Number(v))}
+          onChange={(value) => setGridSize(gridCols, Number(value))}
           aria-label="Grid rows"
         />
         <Text span>cells</Text>
       </Group>
 
       <Group gap="xs">
-        {paletteIds.map((id) => {
-          const active = activeBin === id;
-          return (
-            <Button
-              key={id}
-              size="xs"
-              variant="default"
-              onClick={() => setActiveBin(id)}
-              style={active ? { borderColor: binColor(id) } : undefined}
-              leftSection={<ColorSwatch color={binColor(id)} size={10} withShadow={false} />}
-              title={usedIds.includes(id) ? `Paint bin ${id + 1}` : 'Start a new bin'}
-            >
-              {usedIds.includes(id) ? `Bin ${id + 1}` : '+ New'}
-            </Button>
-          );
-        })}
+        {design.bins.map((bin, index) => (
+          <Button
+            key={bin.id}
+            size="xs"
+            variant="default"
+            onClick={() => selectBin(bin.id)}
+            style={selectedBinId === bin.id ? { borderColor: binColor(bin.id) } : undefined}
+            leftSection={<ColorSwatch color={binColor(bin.id)} size={10} withShadow={false} />}
+            aria-pressed={selectedBinId === bin.id}
+          >
+            Bin {index + 1}
+          </Button>
+        ))}
+        <Button
+          size="xs"
+          variant="default"
+          onClick={startNewBin}
+          style={!selectedExists ? { borderColor: binColor(selectedBinId) } : undefined}
+          leftSection={!selectedExists
+            ? <ColorSwatch color={binColor(selectedBinId)} size={10} withShadow={false} />
+            : undefined}
+          aria-pressed={!selectedExists}
+        >
+          + New
+        </Button>
       </Group>
 
       <Hint>
-        Click or drag to toggle cells for the selected bin. Adjacent bins are
-        printed as separate, complete bins.
+        Painting always modifies the explicitly selected bin. Changing its shape
+        resets that bin’s openings, walls, and cuts, then seeds required cuts again.
       </Hint>
       <div
         className="cell-grid"
@@ -142,34 +130,46 @@ export function ShapeTab() {
           aspectRatio: `${gridCols} / ${gridRows}`,
           gap: cellGap(gridCols, gridRows),
         }}
-        onPointerDown={(e) => { const c = cellFromEvent(e); if (c) handlePointerDown(c.x, c.y); }}
-        onPointerOver={(e) => { if (paintMode) { const c = cellFromEvent(e); if (c) handlePointerEnter(c.x, c.y); } }}
+        onPointerDown={(event) => {
+          const cell = cellFromEvent(event);
+          if (cell) handlePointerDown(cell.x, cell.y);
+        }}
+        onPointerOver={(event) => {
+          if (!paintMode) return;
+          const cell = cellFromEvent(event);
+          if (cell) handlePointerEnter(cell.x, cell.y);
+        }}
       >
         {Array.from({ length: gridRows }, (_, row) =>
           Array.from({ length: gridCols }, (_, col) => {
-            const bin = cellBin.get(cellKey({ x: col, y: row }));
-            const isSelected = bin !== undefined;
+            const binId = cellBin.get(cellKey({ x: col, y: row }));
+            const selected = binId !== undefined;
             return (
               <button
                 key={`${col}-${row}`}
-                data-cell data-x={col} data-y={row}
-                className={isSelected ? 'cell is-on' : 'cell'}
-                style={isSelected ? { background: binColor(bin), borderColor: binColor(bin) } : undefined}
+                data-cell
+                data-x={col}
+                data-y={row}
+                className={selected ? 'cell is-on' : 'cell'}
+                style={selected
+                  ? { background: binColor(binId), borderColor: binColor(binId) }
+                  : undefined}
                 aria-label={`Cell ${col},${row}`}
-                aria-pressed={isSelected}
+                aria-pressed={selected}
               />
             );
-          })
+          }),
         )}
       </div>
       <Stack gap={2}>
         <Text>
           {cells.length} cell{cells.length !== 1 ? 's' : ''}
-          {bins.length > 1 ? ` in ${bins.length} bins` : ''}
+          {design.bins.length > 1 ? ` in ${design.bins.length} bins` : ''}
         </Text>
         {cells.length > 0 && (
           <Text>
-            {widthCells * GRID_PITCH} × {depthCells * GRID_PITCH} mm footprint
+            {footprint.width * GRIDFINITY_SPEC.gridPitch} ×{' '}
+            {footprint.depth * GRIDFINITY_SPEC.gridPitch} mm layout footprint
           </Text>
         )}
       </Stack>

@@ -1,30 +1,31 @@
 import { Button, Menu } from '@mantine/core';
+import { useMemo } from 'react';
+import { toPrintableObjects } from '../lib/export/printableObjects';
 import { downloadStl } from '../lib/export/stl';
-import type { PieceStl } from '../hooks/useBinGeometry';
+import type { Bin } from '../lib/types';
 
 interface Props {
-  pieces: PieceStl[];
+  bins: Bin[];
   generating: boolean;
 }
 
-// Browsers can throttle bursts of downloads from one gesture; spacing them out
-// makes multi-piece "download all" reliable (some browsers may still prompt).
 const DOWNLOAD_SPACING_MS = 300;
 
-export function ExportMenu({ pieces, generating }: Props) {
-  const disabled = generating || pieces.length === 0;
+export function ExportMenu({ bins, generating }: Props) {
+  const printables = useMemo(() => toPrintableObjects(bins), [bins]);
+  const disabled = generating || printables.length === 0;
 
   function downloadAll() {
-    pieces.forEach((piece, i) => {
-      setTimeout(() => downloadStl(piece.buffer, piece.name), i * DOWNLOAD_SPACING_MS);
+    printables.forEach((printable, index) => {
+      setTimeout(() => downloadStl(printable.triangles, printable.name), index * DOWNLOAD_SPACING_MS);
     });
   }
 
-  if (pieces.length <= 1) {
+  if (printables.length <= 1) {
     return (
       <Button
         disabled={disabled}
-        onClick={() => pieces[0] && downloadStl(pieces[0].buffer, pieces[0].name)}
+        onClick={() => printables[0] && downloadStl(printables[0].triangles, printables[0].name)}
         title={disabled ? 'Waiting for geometry…' : 'Download STL file'}
       >
         Export STL
@@ -36,17 +37,20 @@ export function ExportMenu({ pieces, generating }: Props) {
     <Menu>
       <Menu.Target>
         <Button disabled={disabled} rightSection="▾">
-          Export STL ({pieces.length} pieces)
+          Export STL ({printables.length} parts)
         </Button>
       </Menu.Target>
       <Menu.Dropdown>
         <Menu.Item fw={600} onClick={downloadAll}>
-          Download all ({pieces.length})
+          Download all ({printables.length})
         </Menu.Item>
         <Menu.Divider />
-        {pieces.map((piece) => (
-          <Menu.Item key={piece.name} onClick={() => downloadStl(piece.buffer, piece.name)}>
-            {piece.name}
+        {printables.map((printable, index) => (
+          <Menu.Item
+            key={`${printable.name}:${index}`}
+            onClick={() => downloadStl(printable.triangles, printable.name)}
+          >
+            {printable.name}
           </Menu.Item>
         ))}
       </Menu.Dropdown>
