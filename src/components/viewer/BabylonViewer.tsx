@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Button, Text } from '@mantine/core';
+import '@babylonjs/core/Animations/animatable.js';
 import { Animation } from '@babylonjs/core/Animations/animation.js';
 import { CubicEase, EasingFunction } from '@babylonjs/core/Animations/easing.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
