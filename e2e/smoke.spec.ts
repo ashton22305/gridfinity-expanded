@@ -1,4 +1,28 @@
 import { expect, test } from '@playwright/test';
+import type { Locator } from '@playwright/test';
+
+async function readCanvasPixel(
+  canvas: Locator,
+  xRatio: number,
+  yRatio: number,
+) {
+  return canvas.evaluate((element, { xRatio, yRatio }) => {
+    const target = element as HTMLCanvasElement;
+    const gl = target.getContext('webgl2') ?? target.getContext('webgl');
+    if (!gl) throw new Error('Viewer canvas does not have a WebGL context');
+    const pixel = new Uint8Array(4);
+    gl.readPixels(
+      Math.floor(gl.drawingBufferWidth * xRatio),
+      Math.floor(gl.drawingBufferHeight * yRatio),
+      1,
+      1,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      pixel,
+    );
+    return [...pixel];
+  }, { xRatio, yRatio });
+}
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -136,5 +160,6 @@ test('renders an L-shaped triangle soup in editor orientation and resets the orb
   await page.mouse.up();
   await page.getByRole('button', { name: 'Reset view' }).click();
   await expect(canvas).toBeVisible();
+  await expect.poll(async () => (await readCanvasPixel(canvas, 0.5, 0.02))[0]).toBeLessThan(80);
   expect(errors).toEqual([]);
 });
