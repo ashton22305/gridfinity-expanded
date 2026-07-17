@@ -15,12 +15,13 @@ const SECTIONS = {
   'Printer fit': PrinterTab,
 } as const;
 
-const DEFAULT_OPEN_SECTIONS = Object.keys(SECTIONS);
-
 export function SettingsPanel() {
   return (
     <ScrollArea h="100%" p="md">
-      <Accordion multiple defaultValue={DEFAULT_OPEN_SECTIONS}>
+      <Accordion
+        multiple
+        classNames={{ chevron: 'settings-accordion-chevron' }}
+      >
         {(Object.keys(SECTIONS) as (keyof typeof SECTIONS)[]).map((name) => {
           const Section = SECTIONS[name];
           return (
