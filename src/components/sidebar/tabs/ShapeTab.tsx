@@ -120,8 +120,9 @@ export function ShapeTab() {
       </Group>
 
       <Hint>
-        Painting always modifies the explicitly selected bin. Changing its shape
-        resets that bin’s openings, walls, and cuts, then seeds required cuts again.
+        Edge-connected painting modifies the selected bin. Painting elsewhere starts
+        and selects a new bin. Shape changes reset affected openings, walls, and cuts,
+        then seed required cuts again.
       </Hint>
       <div
         className="cell-grid"

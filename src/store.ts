@@ -55,6 +55,11 @@ function nextBinId(bins: BinDesign[]): string {
   return `bin-${index}`;
 }
 
+function isEdgeConnected(cell: Cell, cells: Cell[]): boolean {
+  return cells.some((value) =>
+    Math.abs(value.x - cell.x) + Math.abs(value.y - cell.y) === 1);
+}
+
 function cutOrientation(cut: Cut): 'h' | 'v' {
   return cut.start.x === cut.end.x ? 'v' : 'h';
 }
@@ -139,25 +144,29 @@ export const useAppStore = create<AppState>((set) => ({
 
   paintCell: (cell) => set((state) => {
     const key = cellKey(cell);
-    const selectedId = state.selectedBinId;
     const owner = state.design.bins.find((bin) => bin.cells.some((value) => cellKey(value) === key));
-    if (owner?.id === selectedId) return state;
+    if (owner?.id === state.selectedBinId) return state;
+
+    const selected = state.design.bins.find((bin) => bin.id === state.selectedBinId);
+    const targetId = selected && !isEdgeConnected(cell, selected.cells)
+      ? nextBinId(state.design.bins)
+      : state.selectedBinId;
 
     const bins = state.design.bins
       .map((bin) => {
         if (bin.id === owner?.id) {
           return resetForShape(bin, bin.cells.filter((value) => cellKey(value) !== key), state.design.printer);
         }
-        if (bin.id === selectedId) {
+        if (bin.id === targetId) {
           return resetForShape(bin, [...bin.cells, cell], state.design.printer);
         }
         return bin;
       })
       .filter((bin) => bin.cells.length > 0);
-    if (!bins.some((bin) => bin.id === selectedId)) {
-      bins.push(resetForShape(emptyBin(selectedId), [cell], state.design.printer));
+    if (!bins.some((bin) => bin.id === targetId)) {
+      bins.push(resetForShape(emptyBin(targetId), [cell], state.design.printer));
     }
-    return { design: { ...state.design, bins } };
+    return { design: { ...state.design, bins }, selectedBinId: targetId };
   }),
 
   removeSelectedCell: (cell) => set((state) => {

@@ -12,7 +12,7 @@ beforeEach(() => {
 });
 
 describe('explicit design commands', () => {
-  it('paints only the selected bin and starts a user-selected new bin', () => {
+  it('paints a user-selected new bin', () => {
     const state = useAppStore.getState();
     state.startNewBin();
     const newId = useAppStore.getState().selectedBinId;
@@ -20,6 +20,85 @@ describe('explicit design commands', () => {
     const design = useAppStore.getState().design;
     expect(design.bins.find((bin) => bin.id === newId)?.cells).toEqual([{ x: 2, y: 0 }]);
     expect(design.bins.find((bin) => bin.id === 'bin-1')?.cells).toHaveLength(4);
+  });
+
+  it('creates and selects a new bin when painting outside the selected footprint', () => {
+    useAppStore.getState().paintCell({ x: 4, y: 0 });
+
+    const state = useAppStore.getState();
+    expect(state.selectedBinId).toBe('bin-2');
+    expect(state.design.bins.find((bin) => bin.id === 'bin-2')?.cells).toEqual([{ x: 4, y: 0 }]);
+    expect(state.design.bins.find((bin) => bin.id === 'bin-1')?.cells).toHaveLength(4);
+  });
+
+  it('keeps connected painting in the selected bin', () => {
+    useAppStore.getState().paintCell({ x: 2, y: 0 });
+
+    const state = useAppStore.getState();
+    expect(state.selectedBinId).toBe('bin-1');
+    expect(state.design.bins).toHaveLength(1);
+    expect(state.design.bins[0].cells).toContainEqual({ x: 2, y: 0 });
+  });
+
+  it('starts a new bin when the painted cell only touches another bin', () => {
+    const design = copyDesign();
+    design.bins.push({ id: 'bin-2', cells: [{ x: 4, y: 0 }], openings: [], walls: [], cuts: [] });
+    useAppStore.setState({ design });
+
+    useAppStore.getState().paintCell({ x: 5, y: 0 });
+
+    const state = useAppStore.getState();
+    expect(state.selectedBinId).toBe('bin-3');
+    expect(state.design.bins.find((bin) => bin.id === 'bin-2')?.cells).toEqual([{ x: 4, y: 0 }]);
+    expect(state.design.bins.find((bin) => bin.id === 'bin-3')?.cells).toEqual([{ x: 5, y: 0 }]);
+  });
+
+  it('continues connected painting in an automatically created bin', () => {
+    useAppStore.getState().paintCell({ x: 4, y: 0 });
+    useAppStore.getState().paintCell({ x: 5, y: 0 });
+
+    const state = useAppStore.getState();
+    expect(state.selectedBinId).toBe('bin-2');
+    expect(state.design.bins).toHaveLength(2);
+    expect(state.design.bins.find((bin) => bin.id === 'bin-2')?.cells).toEqual([
+      { x: 4, y: 0 },
+      { x: 5, y: 0 },
+    ]);
+  });
+
+  it('reassigns a connected cell and resets both affected bins', () => {
+    const design = copyDesign();
+    design.bins[0] = {
+      ...design.bins[0],
+      openings: [{ orientation: 'h', x: 0, y: 0 }],
+      walls: [{ start: { x: 5, y: 5 }, end: { x: 20, y: 5 }, width: 1.2 }],
+      cuts: [{ start: { x: 1, y: 0 }, end: { x: 1, y: 2 } }],
+    };
+    design.bins.push({
+      id: 'bin-2',
+      cells: [{ x: 2, y: 0 }, { x: 3, y: 0 }],
+      openings: [{ orientation: 'h', x: 2, y: 0 }],
+      walls: [{ start: { x: 90, y: 5 }, end: { x: 110, y: 5 }, width: 1.2 }],
+      cuts: [{ start: { x: 3, y: 0 }, end: { x: 3, y: 1 } }],
+    });
+    useAppStore.setState({ design });
+
+    useAppStore.getState().paintCell({ x: 2, y: 0 });
+
+    const bins = useAppStore.getState().design.bins;
+    expect(bins.find((bin) => bin.id === 'bin-1')).toMatchObject({
+      openings: [],
+      walls: [],
+      cuts: [],
+    });
+    expect(bins.find((bin) => bin.id === 'bin-1')?.cells).toContainEqual({ x: 2, y: 0 });
+    expect(bins.find((bin) => bin.id === 'bin-2')).toEqual({
+      id: 'bin-2',
+      cells: [{ x: 3, y: 0 }],
+      openings: [],
+      walls: [],
+      cuts: [],
+    });
   });
 
   it('resets bin-owned walls, openings, and cuts after a shape change', () => {
