@@ -89,6 +89,20 @@ body.no-select {
   overflow: hidden;
 }
 
+/*
+ * Mantine's accordion chevron points down and rotates 180 degrees when open,
+ * which reads as an up arrow. Start it pointing right and use the conventional
+ * quarter turn toward the expanded panel instead.
+ */
+.settings-accordion-chevron {
+  transform: rotate(-90deg);
+  transition: transform 150ms ease-out;
+}
+
+.settings-accordion-chevron[data-rotate] {
+  transform: rotate(0deg);
+}
+
 /* ── 3D viewer ───────────────────────────────────────────── */
 .viewer {
   position: absolute;

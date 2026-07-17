@@ -268,6 +268,10 @@ test('locks each paint gesture to one bin and exposes the simplified controls', 
   await expect(page.getByRole('tab', { name: 'Walls' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Cuts' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Split' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Dimensions' })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: 'Features' })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: 'Printer fit' })).toHaveAttribute('aria-expanded', 'false');
+  await page.getByRole('button', { name: 'Dimensions' }).click();
   await expect(page.getByText('(21 mm)', { exact: true })).toBeVisible();
   await expect(page.getByText('Cavity corner radius', { exact: true })).toHaveCount(0);
   await expect(page.getByText(/Base slope/)).toHaveCount(0);
@@ -318,6 +322,7 @@ test('edits seeded cuts, previews multipart gaps, and exports the same generated
   });
   await page.goto('/');
 
+  await page.getByRole('button', { name: 'Printer fit' }).click();
   await page.getByRole('combobox', { name: 'Printer' }).click();
   await page.getByRole('option', { name: 'Custom' }).click();
   await page.getByLabel('Bed width').fill('80');
