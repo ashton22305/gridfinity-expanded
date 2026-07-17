@@ -6,9 +6,8 @@ This is the canonical specification and architecture record for the alpha genera
 
 ```mermaid
 flowchart TB
-  Frontend["Frontend (store, editors)"] --> Validation["Validation (validateDesign)"]
-  Validation --> Params["BinParameters[]"]
-  Params --> Generation["Geometry generation (worker)"]
+  Frontend["Frontend (store, editors — only allows valid parameters)"] --> Params["BinParameters[]"]
+  Params --> Generation["Geometry generation (worker pool, one bin per message)"]
   Generation --> Bins["Bin[]"]
   Bins --> Layout["Modifications for better viewing (previewLayout)"]
   Layout --> Viewer["Babylon viewer"]
@@ -18,7 +17,7 @@ flowchart TB
   STL --> Export["Download"]
 ```
 
-The store owns bins, cuts, printer selection, and all editing behavior. Validation happens only in the frontend: store setters clamp their own fields and `validateDesign()` in `src/lib/validation.ts` applies cross-field validation before any generation input is derived. `buildBinParameters()` converts the validated design into self-contained per-bin parameters, converting height units to millimetres and partitioning cells into piece footprints using the stored cuts. Geometry owns only solid construction and piece-footprint intersection; it trusts its input completely.
+The store owns bins, cuts, printer selection, and all editing behavior. The UI is responsible for only allowing valid parameters — controls constrain their own ranges and dependent values (the height slider re-clamps the shared fillet when it lowers the ceiling); there is no store clamping or validation layer between the UI and geometry generation, and enforcement of UI validity is best-effort during the alpha. `buildBinParameters()` converts the design directly into self-contained per-bin parameters, converting height units to millimetres and partitioning cells into piece footprints using the stored cuts. Geometry owns only solid construction and piece-footprint intersection; it trusts its input completely.
 
 Downstream of generation, `Bin[]` fans out to two branches. The viewer branch (`previewLayout()` in `src/lib/preview.ts`) flattens pieces and attaches the multipart preview gap offsets. The export branch (`toPrintableObjects()` in `src/lib/export/printableObjects.ts`) splits each bin's grouped pieces into distinct, fully named printable objects for STL serialization.
 
@@ -60,7 +59,7 @@ References are the community [Gridfinity specification](https://gridfinity.xyz/s
 
 Each supplied bin is connected and all cells, openings, walls, radii, and piece groups are valid. Enclosed holes, irregular shapes, U shapes, and rings are supported. Geometry does not clamp values, find components, repair invalid profiles, create fallback cavities, or reinterpret piece groups. It also does not verify that its output is manifold; it trusts that valid input produces manifold output, and `npm run check:manifold` is the gate that verifies it.
 
-The frontend validation stage, `validateDesign()`, guarantees a valid fillet radius: it clamps the design's shared fillet to the cavity depth minus `IMPLEMENTATION_ALLOWANCES.minimumStraightCavityWall`, via `maximumFilletRadius(height)`. The fillet slider derives its maximum from the same helper, so no UI state can request a fillet deeper than the cavity.
+The fillet slider derives its maximum from `maximumFilletRadius(height)` (cavity depth minus `IMPLEMENTATION_ALLOWANCES.minimumStraightCavityWall`), and the height slider writes the clamped fillet back when lowering the ceiling, so normal UI interaction cannot request a fillet deeper than the cavity. Nothing re-validates behind the UI.
 
 Openings are canonical unit grid edges. Walls are straight millimetre segments with a width. Pieces are exact cell groups already derived by UI cut planning. Separate bins always create separate complete bins, even where cells touch.
 
@@ -82,10 +81,10 @@ Preview offsets are a viewer-branch concern: `previewLayout()` computes each pie
 
 `toPrintableObjects()` splits each bin's grouped pieces into distinct printable objects, deriving names from the bin's stable id and piece index. STL serialization writes each object's triangle soup directly and calculates one normal per triangle; preview offsets never affect printable coordinates.
 
-The hook validates the design, derives `BinParameters[]`, maintains one initialized worker, debounces changes, increments a revision, ignores stale replies, pairs each successful response with the validated design snapshot that produced it, and reports one generic worker failure message. There is no serialized design key.
+The hook derives `BinParameters[]` and generates bins in parallel: it maintains a small worker pool (sized from `navigator.hardwareConcurrency`, capped at 4), debounces changes, increments a revision, and posts one single-bin message per bin round-robin across the pool. Responses for the current revision are gathered and reassembled in design order; stale replies are ignored, any failure clears the pending revision and reports one generic message, and the completed `Bin[]` is paired with the design snapshot that produced it. There is no serialized design key.
 
 ## Printability gates
 
-`npm run check:manifold` exercises valid rectangular, irregular, U, ring/hole, opening, wall, hardware, multiple-bin, multipart, and minimum-height/maximum-fillet fixtures through the production `validateDesign → buildBinParameters → generateGeometry` path. It reconstructs topology from triangle coordinates and requires non-empty pieces, watertight edges, consistent winding, no degenerates, duplicate faces, membranes, serialized-STL topology errors, or near-horizontal faces (by face normal) inside the fillet transition band — the terrace signature. It also asserts the 0.3 mm multipart gap through the viewer-branch `previewLayout()`.
+`npm run check:manifold` exercises valid rectangular, irregular, U, ring/hole, opening, wall, hardware, multiple-bin, multipart, and minimum-height/maximum-fillet fixtures through the production `buildBinParameters → generateGeometry` path. It reconstructs topology from triangle coordinates and requires non-empty pieces, watertight edges, consistent winding, no degenerates, duplicate faces, membranes, serialized-STL topology errors, or near-horizontal faces (by face normal) inside the fillet transition band — the terrace signature. It also asserts the 0.3 mm multipart gap through the viewer-branch `previewLayout()`.
 
-Unit tests own cut-to-piece derivation, validation clamping, preview layout, and printable-object naming. Browser tests cover editor-matching orientation, flat-faceted preview, orbit/reset, multipart gaps, and STL export.
+Unit tests own cut-to-piece derivation, preview layout, and printable-object naming. Browser tests cover editor-matching orientation, flat-faceted preview, orbit/reset, multipart gaps, and STL export.

@@ -5,8 +5,11 @@ import { generateGeometry } from '../src/lib/geometry/gridfinity';
 import { initManifold } from '../src/lib/geometry/manifold';
 import { previewLayout } from '../src/lib/preview';
 import { cutsForPrinter } from '../src/lib/printers';
-import { validateDesign } from '../src/lib/validation';
-import { GRIDFINITY_SPEC, gridfinityHeight } from '../src/lib/gridfinitySpec';
+import {
+  GRIDFINITY_SPEC,
+  gridfinityHeight,
+  maximumFilletRadius,
+} from '../src/lib/gridfinitySpec';
 import type { BinDesign, Cell, Design, Edge, Wall } from '../src/lib/types';
 
 interface Report {
@@ -296,7 +299,7 @@ const cases: { name: string; value: Design; expectedParts?: number }[] = [
   { name: 'large shared fillet', value: design([bin('bin-1', ring)], { filletRadius: 5 }) },
   { name: 'minimum height, slider-max fillet', value: design([bin('bin-1', uShape)], {
     heightUnits: 2,
-    filletRadius: 8,
+    filletRadius: maximumFilletRadius(gridfinityHeight(2)),
   }) },
   { name: 'multiple bins', value: design([
     bin('bin-1', rectangle(1, 2)),
@@ -317,14 +320,13 @@ const wasm = await initManifold();
 let failed = false;
 for (const fixture of cases) {
   try {
-    const validated = validateDesign(fixture.value);
-    const bins = generateGeometry(wasm, buildBinParameters(validated));
+    const bins = generateGeometry(wasm, buildBinParameters(fixture.value));
     const parts = bins.flatMap((generatedBin) => generatedBin.pieces);
     if (fixture.expectedParts !== undefined && parts.length !== fixture.expectedParts) {
       throw new Error(`expected ${fixture.expectedParts} parts, received ${parts.length}`);
     }
-    const filletRadius = validated.filletRadius;
-    const height = gridfinityHeight(validated.heightUnits);
+    const filletRadius = fixture.value.filletRadius;
+    const height = gridfinityHeight(fixture.value.heightUnits);
     for (const [partIndex, part] of parts.entries()) {
       const report = analyzeTriangleSoup(part.triangles);
       const serialized = stlBoundary(trianglesToStl(part.triangles));
@@ -384,10 +386,7 @@ try {
     bin('top', [{ x: 0, y: 0 }]),
     bin('bottom', [{ x: 0, y: 2 }]),
   ]);
-  const orientationBins = generateGeometry(
-    wasm,
-    buildBinParameters(validateDesign(orientationDesign)),
-  );
+  const orientationBins = generateGeometry(wasm, buildBinParameters(orientationDesign));
   const minY = (triangles: Float32Array) => {
     let value = Number.POSITIVE_INFINITY;
     for (let index = 1; index < triangles.length; index += 3) value = Math.min(value, triangles[index]);
@@ -396,9 +395,7 @@ try {
   if (!(minY(orientationBins[1].pieces[0].triangles) > minY(orientationBins[0].pieces[0].triangles))) {
     throw new Error('geometry did not preserve editor row-down coordinates');
   }
-  const cutDesign = validateDesign(
-    design([bin('bin-1', wideCells, { cuts: wideCuts })], { printer: smallPrinter }),
-  );
+  const cutDesign = design([bin('bin-1', wideCells, { cuts: wideCuts })], { printer: smallPrinter });
   const cutBins = generateGeometry(wasm, buildBinParameters(cutDesign));
   const previewPieces = previewLayout(cutBins, cutDesign);
   const previewXs = [...new Set(previewPieces.map((piece) => piece.previewOffset.x))].sort((a, b) => a - b);

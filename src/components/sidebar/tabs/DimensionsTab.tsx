@@ -12,8 +12,9 @@ export function DimensionsTab() {
   const setHeightUnits = useAppStore((state) => state.setHeightUnits);
   const setPerimeterThickness = useAppStore((state) => state.setPerimeterThickness);
   const setFilletRadius = useAppStore((state) => state.setFilletRadius);
-  const filletMax = Math.min(8, maximumFilletRadius(gridfinityHeight(design.heightUnits)));
-  const filletValue = Math.min(design.filletRadius, filletMax);
+  const filletMaxFor = (heightUnits: number) =>
+    Math.min(8, maximumFilletRadius(gridfinityHeight(heightUnits)));
+  const filletMax = filletMaxFor(design.heightUnits);
 
   return (
     <Stack gap="lg">
@@ -23,7 +24,11 @@ export function DimensionsTab() {
         max={20}
         step={1}
         value={design.heightUnits}
-        onChange={setHeightUnits}
+        onChange={(heightUnits) => {
+          setHeightUnits(heightUnits);
+          const max = filletMaxFor(heightUnits);
+          if (design.filletRadius > max) setFilletRadius(max);
+        }}
         display={`${design.heightUnits}u`}
         unit={`(${gridfinityHeight(design.heightUnits)} mm)`}
       />
@@ -43,9 +48,9 @@ export function DimensionsTab() {
         min={0}
         max={filletMax}
         step={0.2}
-        value={filletValue}
+        value={design.filletRadius}
         onChange={setFilletRadius}
-        display={filletValue.toFixed(1)}
+        display={design.filletRadius.toFixed(1)}
         unit="mm"
         hint="One radius rounds cavity corners and floor-to-wall transitions."
       />

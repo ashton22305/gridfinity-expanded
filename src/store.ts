@@ -171,10 +171,7 @@ export const useAppStore = create<AppState>((set) => ({
   }),
 
   setHeightUnits: (heightUnits) => set((state) => ({
-    design: {
-      ...state.design,
-      heightUnits: Math.max(DESIGN_DEFAULTS.minimumHeightUnits, Math.round(heightUnits)),
-    },
+    design: { ...state.design, heightUnits },
   })),
 
   setPerimeterThickness: (perimeterThickness) => set((state) => ({

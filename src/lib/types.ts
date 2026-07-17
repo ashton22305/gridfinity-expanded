@@ -55,7 +55,7 @@ export interface BinDesign {
   cuts: Cut[];
 }
 
-/** Plain editor-owned state; validated before deriving worker input. */
+/** Plain editor-owned state; the UI only allows valid parameters. */
 export interface Design {
   bins: BinDesign[];
   heightUnits: number;
@@ -71,7 +71,6 @@ export interface BinParameters {
   /** Height in mm, already converted from height units. */
   height: number;
   perimeterThickness: number;
-  /** Already validated by the frontend validation stage. */
   filletRadius: number;
   fasteners: FastenerSettings;
   cells: Cell[];
