@@ -7,7 +7,10 @@ This is the canonical specification and architecture record for the alpha genera
 ```mermaid
 flowchart TB
   Frontend["Frontend (store, editors — only allows valid parameters)"] --> Params["BinParameters[]"]
-  Params --> Generation["Geometry generation (worker pool, one bin per message)"]
+  Params --> Cache["IndexedDB geometry cache (per-bin parameter hash)"]
+  Cache -->|miss| Generation["Geometry generation (worker pool, one bin per message)"]
+  Generation --> Cache
+  Cache -->|hit| Bins["Bin[]"]
   Generation --> Bins["Bin[]"]
   Bins --> Layout["Modifications for better viewing (previewLayout)"]
   Layout --> Viewer["Babylon viewer"]
@@ -17,7 +20,7 @@ flowchart TB
   STL --> Export["Download"]
 ```
 
-The store owns bins, cuts, printer selection, and all editing behavior. The UI is responsible for only allowing valid parameters — controls constrain their own ranges and dependent values (the height slider re-clamps the shared fillet when it lowers the ceiling); there is no store clamping or validation layer between the UI and geometry generation, and enforcement of UI validity is best-effort during the alpha. `buildBinParameters()` converts the design into self-contained per-bin parameters, converting height units to millimetres, partitioning cells into piece footprints using the stored cuts, and mirroring every spatial value across the complete design's shared occupied Y extent. Geometry owns only solid construction and piece-footprint intersection; it trusts its input completely.
+The store owns bins, cuts, printer selection, and all editing behavior. The UI is responsible for only allowing valid parameters — controls constrain their own ranges and dependent values (the height slider re-clamps the shared fillet when it lowers the ceiling), and starting a paint gesture outside the selected bin's edge-connected footprint automatically starts and selects a new logical bin. That bin remains the gesture's target until the pointer is released. There is no geometry-facing clamping or validation layer between the UI and geometry generation, and enforcement of UI validity is best-effort during the alpha. `buildBinParameters()` converts the design into self-contained per-bin parameters, converting height units to millimetres, partitioning cells into piece footprints using the stored cuts, and mirroring every spatial value across the complete design's shared occupied Y extent. Geometry owns only solid construction and piece-footprint intersection; it trusts its input completely.
 
 Downstream of generation, `Bin[]` fans out to two branches. The viewer branch (`previewLayout()` in `src/lib/preview.ts`) flattens pieces and attaches the multipart preview gap offsets. The export branch (`toPrintableObjects()` in `src/lib/export/printableObjects.ts`) splits each bin's grouped pieces into distinct, fully named printable objects for STL serialization.
 
@@ -47,7 +50,7 @@ interface Bin {
 }
 ```
 
-Array order supplies each bin's piece index. Each bin carries its stable store id so preview colors and export filenames follow the same bin identity as the 2D editors, even after bins are deleted and ids are reused. Geometry receives no cuts, printers, filenames, or presentation transforms, and emits no preview data beyond each piece's echoed footprint cells.
+Array order supplies each bin's piece index. Each bin carries its stable store id so preview colors and export filenames follow the same bin identity as the 2D editors, even after bins are deleted and ids are reused. Cache keys exclude that identity: a hit reapplies the requesting bin's current id while preserving the cached piece order, cells, and triangle arrays. Geometry receives no cuts, printers, filenames, or presentation transforms, and emits no preview data beyond each piece's echoed footprint cells.
 
 ## Gridfinity specification
 
@@ -57,7 +60,7 @@ References are the community [Gridfinity specification](https://gridfinity.xyz/s
 
 ## Valid-input assumptions
 
-Each supplied bin is connected and all cells, openings, walls, radii, and piece groups are valid. Enclosed holes, irregular shapes, U shapes, and rings are supported. Geometry does not clamp values, find components, repair invalid profiles, create fallback cavities, or reinterpret piece groups. It also does not verify that its output is manifold; it trusts that valid input produces manifold output, and `npm run check:manifold` is the gate that verifies it.
+Each supplied bin is expected to be connected and all cells, openings, walls, radii, and piece groups are valid. The Shape editor checks edge connectivity when a paint gesture begins: a pointer-down cell sharing a horizontal or vertical edge extends the selected bin, while any other pointer-down cell starts a new selected bin. All cells painted before that pointer is released remain assigned to the gesture's initial target bin. Enclosed holes, irregular shapes, U shapes, and rings are supported. Geometry does not clamp values, find components, repair invalid profiles, create fallback cavities, or reinterpret piece groups. It also does not verify that its output is manifold; it trusts that valid input produces manifold output, and `npm run check:manifold` is the gate that verifies it.
 
 The fillet slider derives its maximum from `maximumFilletRadius(height)` (cavity depth minus `IMPLEMENTATION_ALLOWANCES.minimumStraightCavityWall`), and the height slider writes the clamped fillet back when lowering the ceiling, so normal UI interaction cannot request a fillet deeper than the cavity. Nothing re-validates behind the UI.
 
@@ -75,7 +78,7 @@ Each finished piece is simplified with a sub-micron epsilon to collapse boolean 
 
 ## Coordinates, preview, and export
 
-`Design` remains in editor coordinates: X increases right and Y increases with rows down the screen. At the parameter boundary, `buildBinParameters()` mirrors the complete design across its maximum occupied row. If `maxRow` is the largest cell Y in any bin, cells and vertical edges use `y′ = maxRow − y`; horizontal edges and grid-line points use `y′ = maxRow + 1 − y`; and millimetre wall points use `y′ = (maxRow + 1) × 42 − y`. Piece groups are partitioned before mirroring, so their array indexes and export filenames keep their editor-derived identity even though their echoed `BinPiece.cells` use generation coordinates.
+`Design` remains in editor coordinates: X increases right and Y increases with rows down the screen. At the parameter boundary, `buildBinParameters()` mirrors the complete design across its maximum occupied row, using row zero as the finite extent when the design has no occupied cells. If `maxRow` is the largest cell Y in any bin, cells and vertical edges use `y′ = maxRow − y`; horizontal edges and grid-line points use `y′ = maxRow + 1 − y`; and millimetre wall points use `y′ = (maxRow + 1) × 42 − y`. Piece groups are partitioned before mirroring, so their array indexes and export filenames keep their editor-derived identity even though their echoed `BinPiece.cells` use generation coordinates.
 
 Geometry and STL preserve these global generation coordinates with Z increasing upward. Origin placement is not changed per piece, and the preview and export branches consume the identical triangle soup.
 
@@ -83,10 +86,12 @@ Preview offsets are a viewer-branch concern: `previewLayout()` mirrors the paire
 
 `toPrintableObjects()` splits each bin's grouped pieces into distinct printable objects, deriving names from the bin's stable id and piece index. STL serialization writes each object's triangle soup directly and calculates one normal per triangle; preview offsets never affect printable coordinates.
 
-The hook derives `BinParameters[]` and generates bins in parallel: it maintains a small worker pool (sized from `navigator.hardwareConcurrency`, capped at 4), debounces changes, increments a revision, and posts one single-bin message per bin round-robin across the pool. Responses for the current revision are gathered and reassembled in design order; stale replies are ignored, any failure clears the pending revision and reports one generic message, and the completed `Bin[]` is paired with the design snapshot that produced it. There is no serialized design key.
+The hook derives `BinParameters[]`, debounces changes, and increments a revision before asynchronously checking the per-bin IndexedDB cache. Cache keys are SHA-256 hashes over an explicit cache-version salt and every worker-consumed parameter except `binId`; editor identity and printer metadata therefore do not create duplicate meshes. Complete hits bypass worker messages. Partial hits post only missing bins, one single-bin message round-robin across a small worker pool (sized from `navigator.hardwareConcurrency`, capped at 4), then merge cached and generated bins back into design order. Successful worker results are persisted without delaying rendering.
+
+Cache records contain structured-cloned per-piece `Float32Array` triangle soups and footprint cells, not STL bytes or preview transforms. Reads validate the record shape and return hits independently of a best-effort access-time refresh. Writes trigger cursor-based least-recently-used eviction when the approximate stored mesh size exceeds 100 MB, scanning one record at a time rather than materializing the full cache. Failed database opens are retried on later operations. Hashing, IndexedDB, corruption, and quota errors are all treated as cache misses or ignored writes; only worker-generation failures become the hook's generic geometry error. Revision checks discard stale cache lookups and worker replies, and each completed `Bin[]` remains paired with the design snapshot that produced it.
 
 ## Printability gates
 
 `npm run check:manifold` exercises valid rectangular, irregular, U, ring/hole, opening, concave-perimeter, T- and cross-wall-junction, hardware, multiple-bin, multipart, and minimum-height/maximum-fillet fixtures through the production `buildBinParameters → generateGeometry` path. It reconstructs topology from triangle coordinates and requires non-empty pieces, watertight edges, consistent winding, no degenerates, duplicate faces, membranes, serialized-STL topology errors, or near-horizontal faces (by face normal) inside the fillet transition band — the terrace signature. Full-height wall fixtures must also retain interior top faces, guarding against a closing operation consuming narrow walls. The gate also asserts the mirrored parameter-boundary orientation and the 0.3 mm multipart gap through the viewer-branch `previewLayout()`.
 
-Unit tests own cut-to-piece derivation, preview layout, and printable-object naming. Browser tests cover editor-matching orientation, flat-faceted preview, orbit/reset, multipart gaps, and STL export.
+Unit tests own cut-to-piece derivation, preview layout, and printable-object naming. Browser tests cover editor-matching orientation, flat-faceted preview, orbit/reset, multipart gaps, STL export, cache reuse across parameter reverts and reloads, partial cache hits, transient cache recovery, best-effort LRU refresh, LRU eviction, and the IndexedDB-unavailable fallback.

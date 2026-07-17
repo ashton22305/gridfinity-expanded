@@ -1,23 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Button, Text } from '@mantine/core';
-import {
-  Animation,
-  ArcRotateCamera,
-  Color3,
-  Color4,
-  CubicEase,
-  DirectionalLight,
-  EasingFunction,
-  Engine,
-  HemisphericLight,
-  Material,
-  Mesh,
-  Scene,
-  StandardMaterial,
-  TransformNode,
-  Vector3,
-  VertexData,
-} from '@babylonjs/core';
+import '@babylonjs/core/Animations/animatable.js';
+import { Animation } from '@babylonjs/core/Animations/animation.js';
+import { CubicEase, EasingFunction } from '@babylonjs/core/Animations/easing.js';
+import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
+import { Engine } from '@babylonjs/core/Engines/engine.js';
+import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight.js';
+import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight.js';
+import { Material } from '@babylonjs/core/Materials/material.js';
+import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
+import { Color3, Color4 } from '@babylonjs/core/Maths/math.color.js';
+import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
+import { Mesh } from '@babylonjs/core/Meshes/mesh.js';
+import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js';
+import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js';
+import { Scene } from '@babylonjs/core/scene.js';
 import { previewLayout } from '../../lib/preview';
 import type { Bin, Design } from '../../lib/types';
 import { binColor } from '../sidebar/binColors';

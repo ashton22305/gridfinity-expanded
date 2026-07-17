@@ -18,6 +18,8 @@ Meshes stay at their generated coordinates. Only the `previewLayout()` offset is
 
 ## Lifecycle and camera
 
+`App` loads the named `BabylonViewer` export through `React.lazy` as soon as the center pane mounts. Its `Suspense` fallback fills the same pane while the separate viewer chunk loads, so the preview remains an always-present part of the layout. Viewer code imports concrete Babylon ESM modules instead of the package barrel. Keep the side-effect modules for the engine, arc-rotate camera, and `Animations/animatable.js`: the last one installs the `Scene` animation methods used by camera fit and reset transitions.
+
 The engine, scene, root, camera, and lights are created once. A `ResizeObserver` keeps the canvas matched to the resizable side panels. New bin arrays dispose old meshes and materials, construct replacements, and refit the camera while preserving the user's orbit. “Reset view” restores the editor-matching `3π / 4` orbit.
 
 The generic worker failure message overlays the canvas while the last successful parts remain available. Viewer code does not classify geometry or input errors.

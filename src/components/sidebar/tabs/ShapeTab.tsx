@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Button, ColorSwatch, Group, NumberInput, Stack, Text } from '@mantine/core';
 import { flattenBins } from '../../../lib/cuts';
 import { cellKey } from '../../../lib/edges';
@@ -26,6 +26,7 @@ export function ShapeTab() {
   const removeSelectedCell = useAppStore((state) => state.removeSelectedCell);
   const setGridSize = useAppStore((state) => state.setGridSize);
   const [paintMode, setPaintMode] = useState<'add' | 'remove' | null>(null);
+  const paintBinId = useRef<string | null>(null);
 
   const cells = flattenBins(design.bins);
   const cellBin = new Map(cells.map((cell) => [cellKey(cell), cell.binId]));
@@ -39,15 +40,21 @@ export function ShapeTab() {
     } else {
       setPaintMode('add');
       paintCell(cell);
+      paintBinId.current = useAppStore.getState().selectedBinId;
     }
   }
 
   function handlePointerEnter(x: number, y: number) {
     const cell = { x, y };
-    if (paintMode === 'add') paintCell(cell);
+    if (paintMode === 'add') paintCell(cell, paintBinId.current ?? undefined);
     if (paintMode === 'remove' && cellBin.get(cellKey(cell)) === selectedBinId) {
       removeSelectedCell(cell);
     }
+  }
+
+  function endPaint() {
+    setPaintMode(null);
+    paintBinId.current = null;
   }
 
   function cellFromEvent(event: React.PointerEvent): { x: number; y: number } | null {
@@ -64,8 +71,9 @@ export function ShapeTab() {
     <Stack
       className="no-select"
       gap="sm"
-      onPointerUp={() => setPaintMode(null)}
-      onPointerLeave={() => setPaintMode(null)}
+      onPointerUp={endPaint}
+      onPointerLeave={endPaint}
+      onPointerCancel={endPaint}
     >
       <Group gap="xs">
         <Label>Grid</Label>
@@ -120,8 +128,10 @@ export function ShapeTab() {
       </Group>
 
       <Hint>
-        Painting always modifies the explicitly selected bin. Changing its shape
-        resets that bin’s openings, walls, and cuts, then seeds required cuts again.
+        Edge-connected painting modifies the selected bin. Painting elsewhere starts
+        and selects a new bin. A held paint gesture stays in the same bin until release.
+        Shape changes reset affected openings, walls, and cuts, then seed required cuts
+        again.
       </Hint>
       <div
         className="cell-grid"

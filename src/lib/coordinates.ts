@@ -3,7 +3,7 @@ import type { Cell, Cut, Design, Edge, Point2, Wall } from './types';
 
 /** Largest occupied editor row shared by the complete design. */
 export function maximumOccupiedRow(design: Design): number {
-  return Math.max(...design.bins.flatMap((bin) => bin.cells.map((cell) => cell.y)));
+  return Math.max(0, ...design.bins.flatMap((bin) => bin.cells.map((cell) => cell.y)));
 }
 
 /** Mirror an occupied cell from editor row-down into generation coordinates. */

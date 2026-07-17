@@ -1,4 +1,65 @@
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import type { Locator } from '@playwright/test';
+
+async function cacheRecordCount(page: Page): Promise<number> {
+  return page.evaluate(async () => {
+    const databases = await indexedDB.databases();
+    if (!databases.some((database) => database.name === 'gridfinity-geometry-cache')) return 0;
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('gridfinity-geometry-cache');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const count = await new Promise<number>((resolve, reject) => {
+      const request = database.transaction('meshes').objectStore('meshes').count();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    return count;
+  });
+}
+
+async function cacheRecordKeys(page: Page): Promise<IDBValidKey[]> {
+  return page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('gridfinity-geometry-cache');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+      const request = database.transaction('meshes').objectStore('meshes').getAllKeys();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    return keys;
+  });
+}
+
+async function readCanvasPixel(
+  canvas: Locator,
+  xRatio: number,
+  yRatio: number,
+) {
+  return canvas.evaluate((element, { xRatio, yRatio }) => {
+    const target = element as HTMLCanvasElement;
+    const gl = target.getContext('webgl2') ?? target.getContext('webgl');
+    if (!gl) throw new Error('Viewer canvas does not have a WebGL context');
+    const pixel = new Uint8Array(4);
+    gl.readPixels(
+      Math.floor(gl.drawingBufferWidth * xRatio),
+      Math.floor(gl.drawingBufferHeight * yRatio),
+      1,
+      1,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      pixel,
+    );
+    return [...pixel];
+  }, { xRatio, yRatio });
+}
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -11,7 +72,191 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test('keeps selected-bin painting explicit and exposes the simplified controls', async ({ page }) => {
+test('reuses cached geometry after reverting parameters and reloading', async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    window.Worker = class CountingWorker extends NativeWorker {
+      postMessage(message: unknown, options?: StructuredSerializeOptions | Transferable[]) {
+        const count = Number(localStorage.getItem('geometry-worker-requests') ?? 0) + 1;
+        localStorage.setItem('geometry-worker-requests', String(count));
+        super.postMessage(message, options as StructuredSerializeOptions);
+      }
+    };
+  });
+  await page.goto('/');
+
+  const exportButton = page.getByRole('button', { name: /Export STL/ });
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(1);
+  await expect.poll(() => cacheRecordCount(page)).toBe(1);
+
+  await page.getByRole('button', { name: '+ New' }).click();
+  await page.locator('.cell[aria-pressed="false"]').first().click();
+  await expect(page.getByText('5 cells in 2 bins', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(2);
+  await expect(page.getByRole('button', { name: /Export STL/ })).toBeEnabled({ timeout: 30_000 });
+
+  await page.getByRole('button', { name: 'Cell 2,0' }).click();
+  await expect(page.getByText('4 cells', { exact: true })).toBeVisible();
+  await page.waitForTimeout(750);
+  expect(await page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(2);
+
+  await page.getByRole('button', { name: 'Bin 1' }).click();
+  await page.getByRole('button', { name: 'Cell 1,1' }).click();
+  await expect(page.getByText('3 cells', { exact: true })).toBeVisible();
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(3);
+
+  await page.getByRole('button', { name: 'Cell 1,1' }).click();
+  await expect(page.getByText('4 cells', { exact: true })).toBeVisible();
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await page.waitForTimeout(750);
+  expect(await page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(3);
+
+  await page.reload();
+  await expect(page.locator('.viewer')).toHaveAttribute('data-part-count', '1', { timeout: 30_000 });
+  await expect(page.getByRole('button', { name: /Export STL/ })).toBeEnabled({ timeout: 30_000 });
+  await page.waitForTimeout(750);
+  expect(await page.evaluate(() =>
+    Number(localStorage.getItem('geometry-worker-requests') ?? 0))).toBe(3);
+});
+
+test('renders geometry when IndexedDB is unavailable', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'indexedDB', {
+      configurable: true,
+      get: () => { throw new Error('IndexedDB unavailable'); },
+    });
+    const NativeWorker = window.Worker;
+    Object.defineProperty(window, '__geometryWorkerRequests', { value: 0, writable: true });
+    window.Worker = class CountingWorker extends NativeWorker {
+      postMessage(message: unknown, options?: StructuredSerializeOptions | Transferable[]) {
+        (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests++;
+        super.postMessage(message, options as StructuredSerializeOptions);
+      }
+    };
+  });
+  await page.goto('/');
+
+  await expect(page.locator('.viewer')).toHaveAttribute('data-part-count', '1', { timeout: 30_000 });
+  await expect(page.getByRole('button', { name: /Export STL/ })).toBeEnabled({ timeout: 30_000 });
+  expect(await page.evaluate(() =>
+    (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests)).toBe(1);
+});
+
+test('recovers cache access and keeps hits when LRU refresh fails', async ({ page }) => {
+  await page.addInitScript(() => {
+    const nativeIndexedDB = window.indexedDB;
+    let indexedDBAccesses = 0;
+    Object.defineProperty(window, 'indexedDB', {
+      configurable: true,
+      get: () => {
+        indexedDBAccesses++;
+        if (indexedDBAccesses === 1) throw new Error('Temporary IndexedDB failure');
+        return nativeIndexedDB;
+      },
+    });
+
+    type CacheTestWindow = typeof window & {
+      __failCacheTouches: boolean;
+      __failedCacheTouches: number;
+      __geometryWorkerRequests: number;
+    };
+    const testWindow = window as CacheTestWindow;
+    Object.defineProperties(window, {
+      __failCacheTouches: { value: false, writable: true },
+      __failedCacheTouches: { value: 0, writable: true },
+      __geometryWorkerRequests: { value: 0, writable: true },
+    });
+
+    const nativePut = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function(value: unknown, key?: IDBValidKey) {
+      if (testWindow.__failCacheTouches) {
+        testWindow.__failedCacheTouches++;
+        throw new DOMException('Cache touch failed', 'QuotaExceededError');
+      }
+      const args = key === undefined ? [value] : [value, key];
+      return Reflect.apply(nativePut, this, args) as IDBRequest<IDBValidKey>;
+    };
+
+    const NativeWorker = window.Worker;
+    window.Worker = class CountingWorker extends NativeWorker {
+      postMessage(message: unknown, options?: StructuredSerializeOptions | Transferable[]) {
+        testWindow.__geometryWorkerRequests++;
+        super.postMessage(message, options as StructuredSerializeOptions);
+      }
+    };
+  });
+  await page.goto('/');
+
+  const exportButton = page.getByRole('button', { name: /Export STL/ });
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests
+  )).toBe(1);
+  await expect.poll(() => cacheRecordCount(page)).toBe(1);
+
+  await page.getByRole('button', { name: 'Cell 1,1' }).click();
+  await expect(page.getByText('3 cells', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests
+  )).toBe(2);
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => cacheRecordCount(page)).toBe(2);
+
+  await page.evaluate(() => {
+    (window as typeof window & { __failCacheTouches: boolean }).__failCacheTouches = true;
+  });
+  await page.getByRole('button', { name: 'Cell 1,1' }).click();
+  await expect(page.getByText('4 cells', { exact: true })).toBeVisible();
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __failedCacheTouches: number }).__failedCacheTouches
+  )).toBeGreaterThan(0);
+  expect(await page.evaluate(() =>
+    (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests)).toBe(2);
+});
+
+test('evicts least-recently-used records over the cache size limit', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: /Export STL/ })).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => cacheRecordCount(page)).toBe(1);
+
+  await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('gridfinity-geometry-cache');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = database.transaction('meshes', 'readwrite');
+    const store = transaction.objectStore('meshes');
+    const pieces = [{
+      triangles: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      cells: [{ x: 0, y: 0 }],
+    }];
+    store.put({ key: 'oldest', pieces, byteSize: 60 * 1024 * 1024, lastAccess: 1 });
+    store.put({ key: 'newer', pieces, byteSize: 60 * 1024 * 1024, lastAccess: 2 });
+    await new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    database.close();
+  });
+
+  await page.getByRole('button', { name: 'Cell 1,1' }).click();
+  await expect(page.getByText('3 cells', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Export STL/ })).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => cacheRecordKeys(page)).not.toContain('oldest');
+  expect(await cacheRecordKeys(page)).toContain('newer');
+});
+
+test('locks each paint gesture to one bin and exposes the simplified controls', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => {
@@ -27,14 +272,30 @@ test('keeps selected-bin painting explicit and exposes the simplified controls',
   await expect(page.getByText('Cavity corner radius', { exact: true })).toHaveCount(0);
   await expect(page.getByText(/Base slope/)).toHaveCount(0);
 
-  await page.getByRole('button', { name: '+ New' }).click();
-  await expect(page.getByRole('button', { name: '+ New' })).toHaveAttribute('aria-pressed', 'true');
-  await page.locator('.cell[aria-pressed="false"]').first().click();
+  await page.getByRole('button', { name: 'Cell 4,0' }).click();
   await expect(page.getByText('5 cells in 2 bins', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Bin 1' }).click();
-  await page.locator('.cell[aria-pressed="false"]').first().click();
+  await expect(page.getByRole('button', { name: 'Bin 2' })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Cell 5,0' }).click();
   await expect(page.getByText('6 cells in 2 bins', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Bin 1' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Bin 2' })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Bin 1' }).click();
+  await page.getByRole('button', { name: 'Cell 6,0' }).click();
+  await expect(page.getByText('7 cells in 3 bins', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Bin 3' })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Bin 1' }).click();
+  const dragStart = await page.getByRole('button', { name: 'Cell 4,2' }).boundingBox();
+  const dragEnd = await page.getByRole('button', { name: 'Cell 5,3' }).boundingBox();
+  expect(dragStart).not.toBeNull();
+  expect(dragEnd).not.toBeNull();
+  await page.mouse.move(dragStart!.x + dragStart!.width / 2, dragStart!.y + dragStart!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(dragEnd!.x + dragEnd!.width / 2, dragEnd!.y + dragEnd!.height / 2);
+  await page.mouse.up();
+  await expect(page.getByText('9 cells in 4 bins', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Bin 4' })).toHaveAttribute('aria-pressed', 'true');
 
   await page.getByRole('tab', { name: 'Walls' }).click();
   await expect(page.getByRole('button', { name: 'Reset selected bin walls' })).toBeVisible();
@@ -121,5 +382,6 @@ test('renders an L-shaped triangle soup in editor orientation and resets the orb
   await page.mouse.up();
   await page.getByRole('button', { name: 'Reset view' }).click();
   await expect(canvas).toBeVisible();
+  await expect.poll(async () => (await readCanvasPixel(canvas, 0.5, 0.02))[0]).toBeLessThan(80);
   expect(errors).toEqual([]);
 });

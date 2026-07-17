@@ -42,6 +42,8 @@ describe('preview layout', () => {
     }];
     expect(previewLayout(single, design)[0].previewOffset).toEqual({ x: 0, y: 0 });
     expect(previewLayout(single, null)[0].previewOffset).toEqual({ x: 0, y: 0 });
+    expect(previewLayout(single, { ...design, bins: [] })[0].previewOffset)
+      .toEqual({ x: 0, y: 0 });
   });
 
   it('mirrors horizontal cuts before spacing generation-coordinate pieces', () => {

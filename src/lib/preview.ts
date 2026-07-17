@@ -37,8 +37,8 @@ export function previewOffsetFor(cells: Cell[], cuts: Cut[], pieceCount: number)
 export function previewLayout(bins: Bin[], design: Design | null): PreviewPiece[] {
   const maximumRow = design ? maximumOccupiedRow(design) : null;
   return bins.flatMap((bin) => {
-    const cuts = design?.bins.find((candidate) => candidate.id === bin.binId)?.cuts
-      .map((cut) => mirrorCut(cut, maximumRow!)) ?? [];
+    const designCuts = design?.bins.find((candidate) => candidate.id === bin.binId)?.cuts ?? [];
+    const cuts = designCuts.map((cut) => mirrorCut(cut, maximumRow!));
     return bin.pieces.map((piece, pieceIndex) => ({
       binId: bin.binId,
       pieceIndex,

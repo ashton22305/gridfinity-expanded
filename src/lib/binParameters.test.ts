@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBinParameters } from './binParameters';
+import { maximumOccupiedRow } from './coordinates';
 import type { Design } from './types';
 
 const design: Design = {
@@ -34,6 +35,10 @@ describe('bin parameters', () => {
 
   it('forwards the stable bin id for piece identity', () => {
     expect(buildBinParameters(design)[0].binId).toBe('editor-only-id');
+  });
+
+  it('uses a finite row-zero extent for a design without occupied cells', () => {
+    expect(maximumOccupiedRow({ ...design, bins: [] })).toBe(0);
   });
 
   it('mirrors every spatial parameter across the shared occupied design height', () => {
