@@ -79,7 +79,7 @@ Each finished piece is simplified with a sub-micron epsilon to collapse boolean 
 
 Geometry and STL preserve these global generation coordinates with Z increasing upward. Origin placement is not changed per piece, and the preview and export branches consume the identical triangle soup.
 
-Preview offsets are a viewer-branch concern: `previewLayout()` mirrors the paired design snapshot's cuts into generation coordinates, then computes each piece's 0.3 mm multipart gap offset from those cuts and the piece's echoed footprint cells. The viewer applies only that offset and the Z-up display rotation; it does not compensate for orientation. Its camera presents the mirrored generation data in the same visual direction as the row-down editor. Sequential preview indices give each triangle an independent normal without smoothing or vertex splitting.
+Preview offsets are a viewer-branch concern: `previewLayout()` mirrors the paired design snapshot's cuts into generation coordinates, then computes each piece's 0.3 mm multipart gap offset from those cuts and the piece's echoed footprint cells. The viewer applies only that offset and the Z-up display rotation to meshes. Its default and reset camera orbit views the mirrored generation data from `3π / 4`, presenting it in the same facing direction as the row-down editor. Sequential preview indices give each triangle an independent normal without smoothing or vertex splitting.
 
 `toPrintableObjects()` splits each bin's grouped pieces into distinct printable objects, deriving names from the bin's stable id and piece index. STL serialization writes each object's triangle soup directly and calculates one normal per triangle; preview offsets never affect printable coordinates.
 

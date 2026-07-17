@@ -22,7 +22,7 @@ import { previewLayout } from '../../lib/preview';
 import type { Bin, Design } from '../../lib/types';
 import { binColor } from '../sidebar/binColors';
 
-const DEFAULT_ALPHA = -Math.PI / 4;
+const DEFAULT_ALPHA = Math.PI * 3 / 4;
 const DEFAULT_BETA = Math.PI * 0.32;
 const DEFAULT_RADIUS = 140;
 const FIT_MARGIN = 1.08;
@@ -201,6 +201,7 @@ export function BabylonViewer({ bins, design, error }: Props) {
       className="viewer"
       data-part-count={parts.length}
       data-coordinate-orientation="generation-y-mirrored"
+      data-default-camera-alpha={DEFAULT_ALPHA.toFixed(4)}
       data-face-orientation={FACE_ORIENTATION}
       data-mesh-topology="flat-triangle-soup"
       data-preview-offsets={parts.map((part) =>

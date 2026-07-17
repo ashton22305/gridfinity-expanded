@@ -10,7 +10,7 @@ There is no preview STL, loader, vertex welding, smoothing, or vertex splitting.
 
 ## Coordinates
 
-`buildBinParameters()` mirrors the editor's row-down Y values across the complete design's occupied height before geometry generation; geometry uses those global coordinates with Z-up. The right-handed Babylon scene rotates the shared root by `-Math.PI / 2` to display Z-up data in Y-up space. It does not apply another orientation correction. The default camera therefore presents the mirrored generation data in the same visual direction as the editor.
+`buildBinParameters()` mirrors the editor's row-down Y values across the complete design's occupied height before geometry generation; geometry uses those global coordinates with Z-up. The right-handed Babylon scene rotates the shared root by `-Math.PI / 2` to display Z-up data in Y-up space. It does not transform the mesh again for orientation. The default camera uses an alpha of `3π / 4`, a 180-degree orbit from the pre-mirror view, so the generated layout immediately faces the same direction as the editor.
 
 Meshes stay at their generated coordinates. Only the `previewLayout()` offset is applied as a mesh transform, creating the 0.3 mm multipart gap without changing exported triangles.
 
@@ -18,6 +18,6 @@ Meshes stay at their generated coordinates. Only the `previewLayout()` offset is
 
 ## Lifecycle and camera
 
-The engine, scene, root, camera, and lights are created once. A `ResizeObserver` keeps the canvas matched to the resizable side panels. New bin arrays dispose old meshes and materials, construct replacements, and refit the camera while preserving the user's orbit. “Reset view” restores the default orbit.
+The engine, scene, root, camera, and lights are created once. A `ResizeObserver` keeps the canvas matched to the resizable side panels. New bin arrays dispose old meshes and materials, construct replacements, and refit the camera while preserving the user's orbit. “Reset view” restores the editor-matching `3π / 4` orbit.
 
 The generic worker failure message overlays the canvas while the last successful parts remain available. Viewer code does not classify geometry or input errors.
