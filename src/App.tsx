@@ -1,10 +1,11 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
 import { AppShell, Group, Text } from '@mantine/core';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { SettingsPanel } from './components/sidebar/SettingsPanel';
 import { PanelResizeHandle } from './components/sidebar/PanelResizeHandle';
 import { ExportMenu } from './components/ExportMenu';
 import { useBinGeometry } from './hooks/useBinGeometry';
+import { printerBuildVolumes } from './lib/printers';
 import { useAppStore } from './store';
 
 const BabylonViewer = lazy(() => import('./components/viewer/BabylonViewer').then((module) => ({
@@ -15,6 +16,10 @@ export default function App() {
   const design = useAppStore((s) => s.design);
   const panelWidths = useAppStore((s) => s.panelWidths);
   const { bins, design: generatedDesign, generating, error } = useBinGeometry(design);
+  const buildVolumes = useMemo(
+    () => printerBuildVolumes(design.printer),
+    [design.printer],
+  );
 
   return (
     <AppShell
@@ -49,7 +54,12 @@ export default function App() {
             </div>
           </div>
         )}>
-          <BabylonViewer bins={bins} design={generatedDesign} error={error} />
+          <BabylonViewer
+            bins={bins}
+            design={generatedDesign}
+            buildVolumes={buildVolumes}
+            error={error}
+          />
         </Suspense>
       </AppShell.Main>
     </AppShell>

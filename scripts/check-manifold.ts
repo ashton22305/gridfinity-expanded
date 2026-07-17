@@ -10,7 +10,14 @@ import {
   gridfinityHeight,
   maximumFilletRadius,
 } from '../src/lib/gridfinitySpec';
-import type { BinDesign, Cell, Design, Edge, Wall } from '../src/lib/types';
+import type {
+  BinDesign,
+  Cell,
+  Design,
+  Edge,
+  PrinterSettings,
+  Wall,
+} from '../src/lib/types';
 
 interface Report {
   triangles: number;
@@ -263,7 +270,13 @@ const bin = (
   patch: Partial<BinDesign> = {},
 ): BinDesign => ({ id, cells, openings: [], walls: [], cuts: [], ...patch });
 
-const printer = { name: 'Validation bed', bedWidth: 300, bedDepth: 300 };
+const printer: PrinterSettings = {
+  name: 'Validation bed',
+  bedWidth: 300,
+  bedDepth: 300,
+  buildHeight: 300,
+  headClearance: 5,
+};
 const baseDesign: Omit<Design, 'bins'> = {
   heightUnits: 3,
   perimeterThickness: 1.2,
@@ -277,7 +290,13 @@ const design = (bins: BinDesign[], patch: Partial<Design> = {}): Design => ({
   ...patch,
 });
 
-const smallPrinter = { name: 'Small validation bed', bedWidth: 100, bedDepth: 100 };
+const smallPrinter: PrinterSettings = {
+  name: 'Small validation bed',
+  bedWidth: 100,
+  bedDepth: 100,
+  buildHeight: 100,
+  headClearance: 5,
+};
 const wideCells = rectangle(6, 1);
 const wideCuts = cutsForPrinter(wideCells, smallPrinter);
 const ringCuts = cutsForPrinter(ring, smallPrinter);

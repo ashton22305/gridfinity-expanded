@@ -9,7 +9,13 @@ import {
 import { checkBedFit } from './printers';
 import type { Cell, PrinterSettings } from './types';
 
-const smallPrinter: PrinterSettings = { name: 'Small', bedWidth: 100, bedDepth: 100 };
+const smallPrinter: PrinterSettings = {
+  name: 'Small',
+  bedWidth: 100,
+  bedDepth: 100,
+  buildHeight: 100,
+  headClearance: 5,
+};
 
 const irregular: Cell[] = [
   { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 },

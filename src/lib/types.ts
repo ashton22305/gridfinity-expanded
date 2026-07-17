@@ -45,6 +45,9 @@ export interface PrinterSettings {
   name: string;
   bedWidth: number;
   bedDepth: number;
+  buildHeight: number;
+  /** Safety inset applied to every X and Y side of the build plate. */
+  headClearance: number;
 }
 
 export interface BinDesign {
@@ -106,9 +109,24 @@ export interface PrintableObject {
 
 export interface BedFitResult {
   fits: boolean;
+  fitsXy: boolean;
+  fitsHeight: boolean;
   width: number;
   depth: number;
+  height: number;
   rotated: boolean;
+  failedAxes: Array<'x' | 'y' | 'z'>;
+}
+
+export interface BuildVolume {
+  width: number;
+  depth: number;
+  height: number;
+}
+
+export interface PrinterBuildVolumes {
+  full: BuildVolume;
+  safe: BuildVolume;
 }
 
 export interface GenerateGeometryRequest {

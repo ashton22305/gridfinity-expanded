@@ -152,7 +152,13 @@ describe('explicit design commands', () => {
     const existing = { start: { x: 3, y: 0 }, end: { x: 3, y: 1 } };
     design.bins[0] = { ...design.bins[0], cells, cuts: [existing] };
     useAppStore.setState({ design });
-    useAppStore.getState().setPrinter({ name: 'Custom', bedWidth: 100, bedDepth: 100 });
+    useAppStore.getState().setPrinter({
+      name: 'Custom',
+      bedWidth: 100,
+      bedDepth: 100,
+      buildHeight: 100,
+      headClearance: 5,
+    });
     const cuts = useAppStore.getState().design.bins[0].cuts;
     expect(cuts.map(cutKey)).toContain(cutKey(existing));
     expect(cuts.length).toBeGreaterThan(1);

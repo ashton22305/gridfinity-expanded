@@ -7,6 +7,8 @@ const prusaMk4: PrinterSettings = {
   name: 'Prusa MK4 / MK3S+',
   bedWidth: 250,
   bedDepth: 210,
+  buildHeight: 220,
+  headClearance: 5,
 };
 
 function rectangle(width: number, depth: number, offsetX = 0, offsetY = 0): Cell[] {
@@ -23,9 +25,23 @@ describe('printer planning', () => {
   it('accepts a bin that fits only after a 90-degree rotation', () => {
     expect(checkBedFit(rectangle(4, 5), prusaMk4)).toEqual({
       fits: true,
+      fitsXy: true,
+      fitsHeight: true,
       width: 168,
       depth: 210,
+      height: 0,
       rotated: true,
+      failedAxes: [],
+    });
+  });
+
+  it('uses the inset XY envelope and reports build-height failures', () => {
+    const result = checkBedFit(rectangle(6, 1), prusaMk4, 224);
+    expect(result).toMatchObject({
+      fits: false,
+      fitsXy: false,
+      fitsHeight: false,
+      failedAxes: ['x', 'z'],
     });
   });
 

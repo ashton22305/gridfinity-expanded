@@ -1,6 +1,7 @@
 import { Button, CloseButton, ColorSwatch, Group, Paper, Stack, Text } from '@mantine/core';
 import { availableCuts, cutKey, flattenBins, partitionCells } from '../../../lib/cuts';
 import { checkDesignFit } from '../../../lib/printers';
+import { gridfinityHeight } from '../../../lib/gridfinitySpec';
 import type { Cut } from '../../../lib/types';
 import { useAppStore } from '../../../store';
 import { Hint, Label } from '../../ui/Field';
@@ -27,7 +28,13 @@ export function CutsTab() {
   const move = useAppStore((state) => state.moveCut);
   const reset = useAppStore((state) => state.resetCuts);
   const cells = flattenBins(design.bins);
-  const fit = checkDesignFit(design.bins, design.printer);
+  const fit = checkDesignFit(
+    design.bins,
+    design.printer,
+    gridfinityHeight(design.heightUnits),
+  );
+  const safeWidth = design.printer.bedWidth - design.printer.headClearance * 2;
+  const safeDepth = design.printer.bedDepth - design.printer.headClearance * 2;
   const selectedBin = design.bins.find((bin) => bin.id === selectedBinId);
 
   if (cells.length === 0) return <Hint>Select cells in the Shape tab first.</Hint>;
@@ -81,8 +88,8 @@ export function CutsTab() {
 
       <StatusBanner ok={fit.allFit}>
         {fit.allFit
-          ? `${fit.parts} part${fit.parts !== 1 ? 's' : ''} — every part fits the ${design.printer.name} bed.`
-          : `The largest part (${fit.worst.width} × ${fit.worst.depth} mm) exceeds the ${design.printer.name} bed.`}
+          ? `${fit.parts} part${fit.parts !== 1 ? 's' : ''} — every part fits the ${design.printer.name} bed within its safe ${safeWidth} × ${safeDepth} × ${design.printer.buildHeight} mm volume.`
+          : `The largest part (${fit.worst.width} × ${fit.worst.depth} × ${fit.worst.height} mm) exceeds the ${design.printer.name} bed's safe volume on ${fit.failedAxes.map((axis) => axis.toUpperCase()).join(', ')}.`}
       </StatusBanner>
 
       {selectedBin && (

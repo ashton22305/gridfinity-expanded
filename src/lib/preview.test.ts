@@ -14,7 +14,13 @@ const design: Design = {
   perimeterThickness: 1.2,
   filletRadius: 2.8,
   fasteners: { magnets: false, m3: false },
-  printer: { name: 'Editor only', bedWidth: 100, bedDepth: 100 },
+  printer: {
+    name: 'Editor only',
+    bedWidth: 100,
+    bedDepth: 100,
+    buildHeight: 100,
+    headClearance: 5,
+  },
 };
 
 const bins: Bin[] = [{
