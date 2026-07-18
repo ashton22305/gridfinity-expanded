@@ -4,7 +4,7 @@ const DATABASE_NAME = 'gridfinity-geometry-cache';
 const DATABASE_VERSION = 1;
 const STORE_NAME = 'meshes';
 const LAST_ACCESS_INDEX = 'lastAccess';
-const CACHE_KEY_VERSION = 'geometry-cache-v1';
+const CACHE_KEY_VERSION = 'geometry-cache-v2';
 const MAX_CACHE_BYTES = 100 * 1024 * 1024;
 
 interface CachedGeometryRecord {

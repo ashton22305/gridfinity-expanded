@@ -16,6 +16,8 @@ import { manifoldTriangles } from './manifold';
 const PITCH = GRIDFINITY_SPEC.gridPitch;
 const BASE = GRIDFINITY_SPEC.baseProfile;
 const FILLET_SEGMENTS = 32;
+/** Cavity-only 3D sweep resolution; exterior and 2D offsets stay at 32. */
+const CAVITY_SPHERE_SEGMENTS = 16;
 /** Collapses sub-micron boolean slivers; far below visible or sliceable size. */
 const SLIVER_EPSILON = 1e-3;
 type Polygon = [number, number][];
@@ -111,7 +113,7 @@ function filletSphere(
   const constants = constantsFor(wasm);
   let entry = constants.filletSpheres.get(radius);
   if (!entry) {
-    const sphere = wasm.Manifold.sphere(radius, FILLET_SEGMENTS);
+    const sphere = wasm.Manifold.sphere(radius, CAVITY_SPHERE_SEGMENTS);
     entry = { sphere, halfBall: sphere.trimByPlane([0, 0, -1], 0) };
     constants.filletSpheres.set(radius, entry);
   }
