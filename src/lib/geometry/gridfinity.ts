@@ -18,8 +18,6 @@ const BASE = GRIDFINITY_SPEC.baseProfile;
 const FILLET_SEGMENTS = 32;
 /** Collapses sub-micron boolean slivers; far below visible or sliceable size. */
 const SLIVER_EPSILON = 1e-3;
-/** Below this partition count, one complete sweep is both faster and more stable. */
-const DISTRIBUTED_SWEEP_MIN_PARTITIONS = 30;
 type Polygon = [number, number][];
 
 function roundedRect(
@@ -73,13 +71,6 @@ function cellFootprint(wasm: ManifoldToplevel, cells: Cell[]): CrossSection {
   return wasm.CrossSection.union(cells.map((cell) =>
     wasm.CrossSection.square([PITCH, PITCH])
       .translate([cell.x * PITCH, cell.y * PITCH])));
-}
-
-function isRectangular(cells: Cell[]): boolean {
-  const xs = cells.map(({ x }) => x);
-  const ys = cells.map(({ y }) => y);
-  return cells.length ===
-    (Math.max(...xs) - Math.min(...xs) + 1) * (Math.max(...ys) - Math.min(...ys) + 1);
 }
 
 function closeReentrantCorners(
@@ -195,64 +186,66 @@ function isConvex(polygon: Polygon): boolean {
   return true;
 }
 
-function mergeConvexPolygons(
-  first: number[],
-  second: number[],
-  points: Polygon,
-): number[] | null {
-  for (let firstEdge = 0; firstEdge < first.length; firstEdge++) {
-    const from = first[firstEdge];
-    const to = first[(firstEdge + 1) % first.length];
-    const secondEdge = second.findIndex((vertex, index) =>
-      vertex === to && second[(index + 1) % second.length] === from);
-    if (secondEdge < 0) continue;
-
-    const merged: number[] = [];
-    for (let offset = 1; offset <= first.length; offset++) {
-      merged.push(first[(firstEdge + offset) % first.length]);
-    }
-    for (let offset = 2; offset < second.length; offset++) {
-      merged.push(second[(secondEdge + offset) % second.length]);
-    }
-
-    for (let index = 0; index < merged.length; index++) {
-      const previous = points[merged[(index + merged.length - 1) % merged.length]];
-      const current = points[merged[index]];
-      const next = points[merged[(index + 1) % merged.length]];
-      const cross = (current[0] - previous[0]) * (next[1] - current[1]) -
-        (current[1] - previous[1]) * (next[0] - current[0]);
-      if (cross < -1e-9) return null;
-    }
-    return merged;
+/**
+ * Maximal boundary runs whose interior vertices all turn convexly. Runs break
+ * at reflex vertices so no hull can bulge past the boundary there; a contour
+ * without reflex vertices becomes one wrapped run so every edge is covered.
+ */
+function convexBoundaryChains(contour: Polygon): Polygon[] {
+  const reflex: number[] = [];
+  for (let index = 0; index < contour.length; index++) {
+    const previous = contour[(index + contour.length - 1) % contour.length];
+    const current = contour[index];
+    const next = contour[(index + 1) % contour.length];
+    const cross = (current[0] - previous[0]) * (next[1] - current[1]) -
+      (current[1] - previous[1]) * (next[0] - current[0]);
+    if (cross < -1e-9) reflex.push(index);
   }
-  return null;
+  if (reflex.length === 0) return [[...contour, contour[0]]];
+  return reflex.map((start, position) => {
+    const end = reflex[(position + 1) % reflex.length];
+    const chain: Polygon = [contour[start]];
+    for (let index = (start + 1) % contour.length; ; index = (index + 1) % contour.length) {
+      chain.push(contour[index]);
+      if (index === end) break;
+    }
+    return chain;
+  });
 }
 
-/** Deterministically triangulate a complete footprint, then merge convex neighbors. */
-function convexPartitions(wasm: ManifoldToplevel, footprint: CrossSection): Polygon[] {
-  const polygons = footprint.toPolygons();
-  const points = polygons.flat();
-  const partitions = wasm.triangulate(polygons).map((triangle) => {
-    const indices = [...triangle];
-    const polygon = indices.map((index) => points[index]);
-    return signedArea(polygon) < 0 ? indices.reverse() : indices;
-  });
-
-  let merged = true;
-  while (merged) {
-    merged = false;
-    for (let first = 0; first < partitions.length && !merged; first++) {
-      for (let second = first + 1; second < partitions.length; second++) {
-        const polygon = mergeConvexPolygons(partitions[first], partitions[second], points);
-        if (!polygon) continue;
-        partitions[first] = polygon;
-        partitions.splice(second, 1);
-        merged = true;
-        break;
-      }
+/**
+ * Hulling half-balls placed along a convex boundary run equals that run's
+ * Minkowski sum with the half-ball, plus the run's chord pocket, which must
+ * itself lie inside the seed so the pocket stays covered by the core prism.
+ * Runs whose pocket escapes the seed — wrapped loops, chords crossing holes
+ * or nearby boundary — split until exact; a single segment has no pocket.
+ */
+function chainBandPieces(
+  wasm: ManifoldToplevel,
+  chain: Polygon,
+  seed: CrossSection,
+  halfBall: Manifold,
+  upperZ: number,
+): Manifold[] {
+  if (chain.length > 2) {
+    const pocket = signedArea(chain) < 0 ? [...chain].reverse() : chain;
+    const pocketSection = new wasm.CrossSection([pocket]);
+    const escaped = pocketSection.subtract(seed);
+    const escapes = escaped.area() > 1e-9;
+    pocketSection.delete();
+    escaped.delete();
+    if (escapes) {
+      const middle = chain.length >> 1;
+      return [
+        ...chainBandPieces(wasm, chain.slice(0, middle + 1), seed, halfBall, upperZ),
+        ...chainBandPieces(wasm, chain.slice(middle), seed, halfBall, upperZ),
+      ];
     }
   }
-  return partitions.map((partition) => partition.map((index) => points[index]));
+  const balls = chain.map(([x, y]) => halfBall.translate([x, y, upperZ]));
+  const hull = wasm.Manifold.hull(balls);
+  balls.forEach((ball) => ball.delete());
+  return [hull];
 }
 
 function sphericalSweep(
@@ -274,7 +267,6 @@ function roundedCavity(
   footprint: CrossSection,
   radius: number,
   height: number,
-  distributeSweep: boolean,
 ): Manifold {
   const floorZ = GRIDFINITY_SPEC.baseHeight + GRIDFINITY_SPEC.floorThickness;
   if (radius === 0) {
@@ -283,49 +275,52 @@ function roundedCavity(
 
   const upperZ = floorZ + radius;
   const closedFootprint = closeReentrantCorners(wasm, footprint, radius);
-  const seedFootprint = closedFootprint.offset(-radius, 'Round', 2, FILLET_SEGMENTS);
-  const sphere = wasm.Manifold.sphere(radius, FILLET_SEGMENTS);
-  if (!distributeSweep) {
-    const result = sphericalSweep(seedFootprint, sphere, height, upperZ);
-    closedFootprint.delete();
-    seedFootprint.delete();
-    sphere.delete();
-    return result;
-  }
-  const contours = seedFootprint.toPolygons();
-  if (contours.length !== 1 || isConvex(contours[0])) {
-    const result = sphericalSweep(seedFootprint, sphere, height, upperZ);
-    closedFootprint.delete();
-    seedFootprint.delete();
-    sphere.delete();
-    return result;
-  }
-  const partitions = convexPartitions(wasm, seedFootprint);
-  if (partitions.length < DISTRIBUTED_SWEEP_MIN_PARTITIONS) {
-    const result = sphericalSweep(seedFootprint, sphere, height, upperZ);
-    closedFootprint.delete();
-    seedFootprint.delete();
-    sphere.delete();
-    return result;
-  }
-  const simplifiedSeed = seedFootprint.simplify();
-  const simplifiedPartitions = convexPartitions(wasm, simplifiedSeed);
-  simplifiedSeed.delete();
-  const swept = simplifiedPartitions.map((partition) => {
-    const section = new wasm.CrossSection([partition]);
-    const rawExtrusion = section.extrude(height - upperZ);
-    const extrusion = rawExtrusion.translate([0, 0, upperZ]);
-    const result = extrusion.minkowskiSum(sphere);
-    section.delete();
-    rawExtrusion.delete();
-    extrusion.delete();
-    return result;
-  });
-  const result = wasm.Manifold.union(swept);
-  swept.forEach((partition) => partition.delete());
+  const rawSeed = closedFootprint.offset(-radius, 'Round', 2, FILLET_SEGMENTS);
+  const seed = rawSeed.simplify();
   closedFootprint.delete();
-  seedFootprint.delete();
+  rawSeed.delete();
+  const sphere = wasm.Manifold.sphere(radius, FILLET_SEGMENTS);
+
+  const contours = seed.toPolygons();
+  if (contours.length === 1 && isConvex(contours[0])) {
+    const result = sphericalSweep(seed, sphere, height, upperZ);
+    seed.delete();
+    sphere.delete();
+    return result;
+  }
+
+  // Only the sweep's fillet band, from the floor to the sphere's tangent
+  // height, shapes the cavity; the straight walls above it are a prism. The
+  // band is the seed's area prism plus its boundary swept by the sphere's
+  // lower half, assembled from per-chain hulls instead of area sweeps so the
+  // union's operands hold no redundant interior sphere geometry.
+  const halfBall = sphere.trimByPlane([0, 0, -1], 0);
   sphere.delete();
+  const rawCore = seed.extrude(radius);
+  const pieces: Manifold[] = [rawCore.translate([0, 0, floorZ])];
+  rawCore.delete();
+  for (const contour of contours) {
+    for (const chain of convexBoundaryChains(contour)) {
+      pieces.push(...chainBandPieces(wasm, chain, seed, halfBall, upperZ));
+    }
+  }
+  halfBall.delete();
+  const band = wasm.Manifold.union(pieces);
+  pieces.forEach((piece) => piece.delete());
+  // The wall prism reproduces the band's own top cross-section, so wall and
+  // fillet discretizations agree exactly. Its base sits below the band's cap
+  // by less than the extraction weld grid, so the overlap seam quantizes onto
+  // the cap plane and collapses; it overshoots the open top like partCutter.
+  const seamZ = upperZ - SLIVER_EPSILON / 1000;
+  const wall = band.slice(seamZ);
+  const rawPrism = wall.extrude(height + 1 - seamZ);
+  const prism = rawPrism.translate([0, 0, seamZ]);
+  const result = band.add(prism);
+  seed.delete();
+  wall.delete();
+  rawPrism.delete();
+  prism.delete();
+  band.delete();
   return result;
 }
 
@@ -394,7 +389,6 @@ function buildBinSolid(
     cavityFootprint(wasm, bin, footprint, bin.perimeterThickness),
     bin.filletRadius,
     bin.height,
-    bin.openings.length === 0 && bin.walls.length === 0 && !isRectangular(bin.cells),
   ));
   const cutters = hardwareCutters(wasm, bin.fasteners, bin.cells);
   if (cutters.length > 0) solid = solid.subtract(wasm.Manifold.union(cutters));
