@@ -56,6 +56,37 @@ function loft(
 interface ConstantSolids {
   base?: Manifold;
   filletSpheres: Map<number, { sphere: Manifold; halfBall: Manifold }>;
+  finishedSolids: ManifoldLru;
+  filletBands: ManifoldLru;
+}
+
+const INTERMEDIATE_CACHE_SIZE = 4;
+
+/**
+ * Worker-local evaluated manifolds. Entries are refreshed on access and only
+ * the cache owns deletion; callers may derive solids from a hit but must never
+ * delete the cached value itself.
+ */
+class ManifoldLru {
+  private readonly entries = new Map<string, Manifold>();
+
+  get(key: string): Manifold | undefined {
+    const value = this.entries.get(key);
+    if (!value) return undefined;
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    return value;
+  }
+
+  set(key: string, value: Manifold): void {
+    value.numVert();
+    this.entries.set(key, value);
+    if (this.entries.size <= INTERMEDIATE_CACHE_SIZE) return;
+    const oldest = this.entries.entries().next().value as [string, Manifold] | undefined;
+    if (!oldest) return;
+    this.entries.delete(oldest[0]);
+    oldest[1].delete();
+  }
 }
 
 const constantSolids = new WeakMap<ManifoldToplevel, ConstantSolids>();
@@ -63,7 +94,11 @@ const constantSolids = new WeakMap<ManifoldToplevel, ConstantSolids>();
 function constantsFor(wasm: ManifoldToplevel): ConstantSolids {
   let constants = constantSolids.get(wasm);
   if (!constants) {
-    constants = { filletSpheres: new Map() };
+    constants = {
+      filletSpheres: new Map(),
+      finishedSolids: new ManifoldLru(),
+      filletBands: new ManifoldLru(),
+    };
     constantSolids.set(wasm, constants);
   }
   return constants;
@@ -333,16 +368,22 @@ function roundedCavity(
   // band is the seed's area prism plus its boundary swept by the sphere's
   // lower half, assembled from per-chain hulls instead of area sweeps so the
   // union's operands hold no redundant interior sphere geometry.
-  const rawCore = seed.extrude(radius);
-  const pieces: Manifold[] = [rawCore.translate([0, 0, floorZ])];
-  rawCore.delete();
-  for (const contour of contours) {
-    for (const chain of convexBoundaryChains(contour)) {
-      pieces.push(...chainBandPieces(wasm, chain, seed, halfBall, upperZ));
+  const bandKey = `${radius}:${JSON.stringify(contours)}`;
+  const bandCache = constantsFor(wasm).filletBands;
+  let band = bandCache.get(bandKey);
+  if (!band) {
+    const rawCore = seed.extrude(radius);
+    const pieces: Manifold[] = [rawCore.translate([0, 0, floorZ])];
+    rawCore.delete();
+    for (const contour of contours) {
+      for (const chain of convexBoundaryChains(contour)) {
+        pieces.push(...chainBandPieces(wasm, chain, seed, halfBall, upperZ));
+      }
     }
+    band = wasm.Manifold.union(pieces);
+    pieces.forEach((piece) => piece.delete());
+    bandCache.set(bandKey, band);
   }
-  const band = wasm.Manifold.union(pieces);
-  pieces.forEach((piece) => piece.delete());
   // The wall prism reproduces the band's own top cross-section, so wall and
   // fillet discretizations agree exactly. Its base sits below the band's cap
   // by less than the extraction weld grid, so the overlap seam quantizes onto
@@ -356,7 +397,6 @@ function roundedCavity(
   wall.delete();
   rawPrism.delete();
   prism.delete();
-  band.delete();
   return result;
 }
 
@@ -431,6 +471,21 @@ function buildBinSolid(
   return solid;
 }
 
+function finishedSolidKey(bin: BinParameters): string {
+  return JSON.stringify({
+    height: bin.height,
+    perimeterThickness: bin.perimeterThickness,
+    filletRadius: bin.filletRadius,
+    fasteners: {
+      magnets: bin.fasteners.magnets,
+      m3: bin.fasteners.m3,
+    },
+    cells: bin.cells,
+    openings: bin.openings,
+    walls: bin.walls,
+  });
+}
+
 /** Vertically overshoot the solid so cutter planes never coincide with its faces. */
 function partCutter(
   wasm: ManifoldToplevel,
@@ -447,7 +502,13 @@ export function generateGeometry(
 ): Bin[] {
   const base = canonicalBase(wasm);
   return bins.map((bin) => {
-    const solid = buildBinSolid(wasm, bin, base);
+    const solidCache = constantsFor(wasm).finishedSolids;
+    const key = finishedSolidKey(bin);
+    let solid = solidCache.get(key);
+    if (!solid) {
+      solid = buildBinSolid(wasm, bin, base);
+      solidCache.set(key, solid);
+    }
     return {
       binId: bin.binId,
       pieces: bin.pieces.map((cells) => {

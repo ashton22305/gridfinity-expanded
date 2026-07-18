@@ -38,6 +38,16 @@ function poolSize(): number {
   return Math.min(MAX_POOL_SIZE, Math.max(1, (navigator.hardwareConcurrency ?? 2) - 1));
 }
 
+/** FNV-1a keeps each logical bin on one worker so its WASM-local LRUs stay hot. */
+function homeWorkerIndex(binId: string, workerCount: number): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < binId.length; index++) {
+    hash ^= binId.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) % workerCount;
+}
+
 export function useBinGeometry(design: Design): GeometryState {
   const [state, setState] = useState<GeometryState>({
     bins: [],
@@ -151,9 +161,9 @@ export function useBinGeometry(design: Design): GeometryState {
           remaining: missing.length,
         };
         const workers = workersRef.current;
-        missing.forEach((bin, index) => {
+        missing.forEach((bin) => {
           const request: GenerateGeometryRequest = { revision, bins: [bin] };
-          workers[index % workers.length]?.postMessage(request);
+          workers[homeWorkerIndex(bin.binId, workers.length)]?.postMessage(request);
         });
       })();
     }, DEBOUNCE_MS);
