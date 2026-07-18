@@ -250,6 +250,8 @@ const ring: Cell[] = [
   { x: 0, y: 1 }, { x: 2, y: 1 },
   { x: 0, y: 2 }, { x: 1, y: 2 }, { x: 2, y: 2 },
 ];
+const largeStaircase = Array.from({ length: 6 }, (_, y) =>
+  Array.from({ length: 6 - y }, (_, x) => ({ x, y }))).flat();
 const h = (x: number, y: number): Edge => ({ orientation: 'h', x, y });
 const v = (x: number, y: number): Edge => ({ orientation: 'v', x, y });
 const wall = (x1: number, y1: number, x2: number, y2: number, width = 1.6): Wall => ({
@@ -293,6 +295,7 @@ const cases: {
   { name: 'concave perimeter junction', value: design([bin('bin-1', lShape)]) },
   { name: 'valid U-shape', value: design([bin('bin-1', uShape)]) },
   { name: 'valid ring with hole', value: design([bin('bin-1', ring)]) },
+  { name: '21-cell staircase', value: design([bin('bin-1', largeStaircase)]) },
   { name: 'outer opening', value: design([bin('bin-1', rectangle(2, 2), { openings: [h(0, 0)] })]) },
   { name: 'hole opening', value: design([bin('bin-1', ring, { openings: [v(1, 1)] })]) },
   { name: 'full-height wall', value: design([bin('bin-1', rectangle(2, 2), {
