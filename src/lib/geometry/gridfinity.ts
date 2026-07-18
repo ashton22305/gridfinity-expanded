@@ -48,8 +48,45 @@ function loft(
   ]);
 }
 
+/**
+ * Configuration-independent solids rebuilt identically on every generation,
+ * cached for the worker's lifetime. Cached manifolds are never deleted and
+ * callers must not delete them or solids derived from them by translation.
+ */
+interface ConstantSolids {
+  base?: Manifold;
+  filletSpheres: Map<number, { sphere: Manifold; halfBall: Manifold }>;
+}
+
+const constantSolids = new WeakMap<ManifoldToplevel, ConstantSolids>();
+
+function constantsFor(wasm: ManifoldToplevel): ConstantSolids {
+  let constants = constantSolids.get(wasm);
+  if (!constants) {
+    constants = { filletSpheres: new Map() };
+    constantSolids.set(wasm, constants);
+  }
+  return constants;
+}
+
+function filletSphere(
+  wasm: ManifoldToplevel,
+  radius: number,
+): { sphere: Manifold; halfBall: Manifold } {
+  const constants = constantsFor(wasm);
+  let entry = constants.filletSpheres.get(radius);
+  if (!entry) {
+    const sphere = wasm.Manifold.sphere(radius, FILLET_SEGMENTS);
+    entry = { sphere, halfBall: sphere.trimByPlane([0, 0, -1], 0) };
+    constants.filletSpheres.set(radius, entry);
+  }
+  return entry;
+}
+
 /** Canonical Gridfinity base centered on the origin. */
 function canonicalBase(wasm: ManifoldToplevel): Manifold {
+  const constants = constantsFor(wasm);
+  if (constants.base) return constants.base;
   const bottom = roundedRect(wasm, BASE.bottomWidth, BASE.bottomWidth, BASE.bottomRadius);
   const middle = roundedRect(wasm, BASE.middleWidth, BASE.middleWidth, BASE.middleRadius);
   const top = roundedRect(
@@ -58,13 +95,16 @@ function canonicalBase(wasm: ManifoldToplevel): Manifold {
     GRIDFINITY_SPEC.outerTopWidth,
     GRIDFINITY_SPEC.outerCornerRadius,
   );
-  return wasm.Manifold.union([
+  constants.base = wasm.Manifold.union([
     loft(wasm, bottom, 0, middle, BASE.lowerChamferHeight),
     middle
       .extrude(BASE.upperChamferStart - BASE.lowerChamferHeight)
       .translate([0, 0, BASE.lowerChamferHeight]),
     loft(wasm, middle, BASE.upperChamferStart, top, BASE.height),
   ]);
+  // Force evaluation now so later booleans reuse the cached mesh.
+  constants.base.numVert();
+  return constants.base;
 }
 
 function cellFootprint(wasm: ManifoldToplevel, cells: Cell[]): CrossSection {
@@ -279,13 +319,12 @@ function roundedCavity(
   const seed = rawSeed.simplify();
   closedFootprint.delete();
   rawSeed.delete();
-  const sphere = wasm.Manifold.sphere(radius, FILLET_SEGMENTS);
+  const { sphere, halfBall } = filletSphere(wasm, radius);
 
   const contours = seed.toPolygons();
   if (contours.length === 1 && isConvex(contours[0])) {
     const result = sphericalSweep(seed, sphere, height, upperZ);
     seed.delete();
-    sphere.delete();
     return result;
   }
 
@@ -294,8 +333,6 @@ function roundedCavity(
   // band is the seed's area prism plus its boundary swept by the sphere's
   // lower half, assembled from per-chain hulls instead of area sweeps so the
   // union's operands hold no redundant interior sphere geometry.
-  const halfBall = sphere.trimByPlane([0, 0, -1], 0);
-  sphere.delete();
   const rawCore = seed.extrude(radius);
   const pieces: Manifold[] = [rawCore.translate([0, 0, floorZ])];
   rawCore.delete();
@@ -304,7 +341,6 @@ function roundedCavity(
       pieces.push(...chainBandPieces(wasm, chain, seed, halfBall, upperZ));
     }
   }
-  halfBall.delete();
   const band = wasm.Manifold.union(pieces);
   pieces.forEach((piece) => piece.delete());
   // The wall prism reproduces the band's own top cross-section, so wall and
