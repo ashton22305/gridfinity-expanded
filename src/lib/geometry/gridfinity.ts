@@ -55,7 +55,7 @@ function loft(
  */
 interface ConstantSolids {
   base?: Manifold;
-  filletSpheres: Map<number, { sphere: Manifold; halfBall: Manifold }>;
+  filletSpheres: Map<number, Manifold>;
 }
 
 const constantSolids = new WeakMap<ManifoldToplevel, ConstantSolids>();
@@ -69,18 +69,14 @@ function constantsFor(wasm: ManifoldToplevel): ConstantSolids {
   return constants;
 }
 
-function filletSphere(
-  wasm: ManifoldToplevel,
-  radius: number,
-): { sphere: Manifold; halfBall: Manifold } {
+function filletSphere(wasm: ManifoldToplevel, radius: number): Manifold {
   const constants = constantsFor(wasm);
-  let entry = constants.filletSpheres.get(radius);
-  if (!entry) {
-    const sphere = wasm.Manifold.sphere(radius, FILLET_SEGMENTS);
-    entry = { sphere, halfBall: sphere.trimByPlane([0, 0, -1], 0) };
-    constants.filletSpheres.set(radius, entry);
+  let sphere = constants.filletSpheres.get(radius);
+  if (!sphere) {
+    sphere = wasm.Manifold.sphere(radius, FILLET_SEGMENTS);
+    constants.filletSpheres.set(radius, sphere);
   }
-  return entry;
+  return sphere;
 }
 
 /** Canonical Gridfinity base centered on the origin. */
@@ -206,86 +202,178 @@ function cavityFootprint(
   return cavity;
 }
 
-function signedArea(polygon: Polygon): number {
-  return polygon.reduce((area, [x, y], index) => {
-    const next = polygon[(index + 1) % polygon.length];
-    return area + x * next[1] - y * next[0];
-  }, 0);
-}
+/** Latitude steps of the floor fillet, matching a 32-segment sphere. */
+const FILLET_RINGS = FILLET_SEGMENTS / 4;
 
-function isConvex(polygon: Polygon): boolean {
-  const orientation = Math.sign(signedArea(polygon));
-  for (let index = 0; index < polygon.length; index++) {
-    const previous = polygon[(index + polygon.length - 1) % polygon.length];
-    const current = polygon[index];
-    const next = polygon[(index + 1) % polygon.length];
-    const cross = (current[0] - previous[0]) * (next[1] - current[1]) -
-      (current[1] - previous[1]) * (next[0] - current[0]);
-    if (cross * orientation < -1e-9) return false;
-  }
-  return true;
-}
-
-/**
- * Maximal boundary runs whose interior vertices all turn convexly. Runs break
- * at reflex vertices so no hull can bulge past the boundary there; a contour
- * without reflex vertices becomes one wrapped run so every edge is covered.
- */
-function convexBoundaryChains(contour: Polygon): Polygon[] {
-  const reflex: number[] = [];
-  for (let index = 0; index < contour.length; index++) {
-    const previous = contour[(index + contour.length - 1) % contour.length];
-    const current = contour[index];
-    const next = contour[(index + 1) % contour.length];
-    const cross = (current[0] - previous[0]) * (next[1] - current[1]) -
-      (current[1] - previous[1]) * (next[0] - current[0]);
-    if (cross < -1e-9) reflex.push(index);
-  }
-  if (reflex.length === 0) return [[...contour, contour[0]]];
-  return reflex.map((start, position) => {
-    const end = reflex[(position + 1) % reflex.length];
-    const chain: Polygon = [contour[start]];
-    for (let index = (start + 1) % contour.length; ; index = (index + 1) % contour.length) {
-      chain.push(contour[index]);
-      if (index === end) break;
+/** Nearest point on any contour segment to the given point. */
+function nearestOnContours(
+  contours: Polygon[],
+  x: number,
+  y: number,
+): [number, number] {
+  let best: [number, number] = contours[0][0];
+  let bestDistance = Infinity;
+  for (const contour of contours) {
+    for (let index = 0; index < contour.length; index++) {
+      const [ax, ay] = contour[index];
+      const [bx, by] = contour[(index + 1) % contour.length];
+      const dx = bx - ax;
+      const dy = by - ay;
+      const lengthSq = dx * dx + dy * dy;
+      const t = lengthSq > 0
+        ? Math.min(1, Math.max(0, ((x - ax) * dx + (y - ay) * dy) / lengthSq))
+        : 0;
+      const px = ax + t * dx;
+      const py = ay + t * dy;
+      const distance = (x - px) * (x - px) + (y - py) * (y - py);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = [px, py];
+      }
     }
-    return chain;
-  });
+  }
+  return best;
 }
 
 /**
- * Hulling half-balls placed along a convex boundary run equals that run's
- * Minkowski sum with the half-ball, plus the run's chord pocket, which must
- * itself lie inside the seed so the pocket stays covered by the core prism.
- * Runs whose pocket escapes the seed — wrapped loops, chords crossing holes
- * or nearby boundary — split until exact; a single segment has no pocket.
+ * One cavity region as a single closed mesh: the floor fillet as latitude
+ * rings interpolated along nearest-point projection fibers between the
+ * region and its wall polygon, straight walls above, and triangulated caps.
+ * Every wall vertex lies exactly the fillet radius from the region and
+ * projection fibers never cross, so the ring interpolation q + (w − q)·sin φ
+ * traces the exact spherical sweep surface, with sphere corners emerging
+ * where fibers fan around a region vertex. A single mesh has no seams, so
+ * the final subtract meets it transversally everywhere — no boolean chatter
+ * and no floor terraces. Returns null when a wall vertex projects
+ * discontinuously (a waist narrower than the sweep diameter); the caller
+ * falls back to the Minkowski sweep for that region.
  */
-function chainBandPieces(
+function sweptRegionMesh(
   wasm: ManifoldToplevel,
-  chain: Polygon,
-  seed: CrossSection,
-  halfBall: Manifold,
-  upperZ: number,
-): Manifold[] {
-  if (chain.length > 2) {
-    const pocket = signedArea(chain) < 0 ? [...chain].reverse() : chain;
-    const pocketSection = new wasm.CrossSection([pocket]);
-    const escaped = pocketSection.subtract(seed);
-    const escapes = escaped.area() > 1e-9;
-    pocketSection.delete();
-    escaped.delete();
-    if (escapes) {
-      const middle = chain.length >> 1;
-      return [
-        ...chainBandPieces(wasm, chain.slice(0, middle + 1), seed, halfBall, upperZ),
-        ...chainBandPieces(wasm, chain.slice(middle), seed, halfBall, upperZ),
-      ];
+  region: CrossSection,
+  radius: number,
+  floorZ: number,
+  topZ: number,
+): Manifold | null {
+  const upperZ = floorZ + radius;
+  const seedPolygons = region.toPolygons();
+  const rawWall = region.offset(radius, 'Round', 2, FILLET_SEGMENTS);
+  const wall = rawWall.simplify();
+  rawWall.delete();
+  const wallPolygons = wall.toPolygons();
+  wall.delete();
+
+  const vertices: number[] = [];
+  const addVertex = (x: number, y: number, z: number): number => {
+    vertices.push(x, y, z);
+    return vertices.length / 3 - 1;
+  };
+  const triangles: number[] = [];
+  const emit = (a: number, b: number, c: number) => {
+    if (a !== b && b !== c && a !== c) triangles.push(a, b, c);
+  };
+
+  const floorPolygons: Polygon[] = [];
+  const floorIndices: number[][] = [];
+  const topPolygons: Polygon[] = [];
+  const topIndices: number[][] = [];
+
+  for (const contour of wallPolygons) {
+    if (contour.length < 3) continue;
+    const projections = contour.map(([x, y]) => nearestOnContours(seedPolygons, x, y));
+    for (let index = 0; index < contour.length; index++) {
+      const next = (index + 1) % contour.length;
+      const wallStep = Math.hypot(
+        contour[next][0] - contour[index][0],
+        contour[next][1] - contour[index][1],
+      );
+      const seedStep = Math.hypot(
+        projections[next][0] - projections[index][0],
+        projections[next][1] - projections[index][1],
+      );
+      // Concave trims stretch and skip projections by a few chord lengths;
+      // a genuine fiber discontinuity (a waist narrower than the sweep
+      // diameter) jumps by about the sweep diameter, so a radius-scaled
+      // threshold separates the two. Stitching across a discontinuity would
+      // bridge the waist.
+      if (seedStep > 2.5 * wallStep + radius / 2) return null;
+    }
+
+    // rings[k][i]: vertex at latitude k above wall vertex i; ring 0
+    // deduplicates fibers that collapse onto one region vertex, closing
+    // sphere-corner fans by index instead of by coincident vertices.
+    const rings: number[][] = [];
+    const floorKeys = new Map<string, number>();
+    for (let k = 0; k <= FILLET_RINGS; k++) {
+      const phi = (k * Math.PI) / (2 * FILLET_RINGS);
+      const scale = Math.sin(phi);
+      const z = upperZ - radius * Math.cos(phi);
+      rings.push(contour.map(([x, y], index) => {
+        const [qx, qy] = projections[index];
+        const vx = qx + (x - qx) * scale;
+        const vy = qy + (y - qy) * scale;
+        if (k > 0) return addVertex(vx, vy, z);
+        const key = `${vx},${vy}`;
+        let existing = floorKeys.get(key);
+        if (existing === undefined) {
+          existing = addVertex(vx, vy, z);
+          floorKeys.set(key, existing);
+        }
+        return existing;
+      }));
+    }
+    const top = contour.map(([x, y]) => addVertex(x, y, topZ));
+
+    for (let index = 0; index < contour.length; index++) {
+      const next = (index + 1) % contour.length;
+      for (let k = 0; k < FILLET_RINGS; k++) {
+        emit(rings[k][index], rings[k][next], rings[k + 1][next]);
+        emit(rings[k][index], rings[k + 1][next], rings[k + 1][index]);
+      }
+      emit(rings[FILLET_RINGS][index], rings[FILLET_RINGS][next], top[next]);
+      emit(rings[FILLET_RINGS][index], top[next], top[index]);
+    }
+
+    const floorContour: number[] = [];
+    for (const ringIndex of rings[0]) {
+      if (floorContour[floorContour.length - 1] !== ringIndex) floorContour.push(ringIndex);
+    }
+    while (floorContour.length > 1 && floorContour[0] === floorContour[floorContour.length - 1]) {
+      floorContour.pop();
+    }
+    if (floorContour.length >= 3) {
+      floorPolygons.push(floorContour.map((v) =>
+        [vertices[v * 3], vertices[v * 3 + 1]] as [number, number]));
+      floorIndices.push(floorContour);
+    }
+    topPolygons.push(contour);
+    topIndices.push(top);
+  }
+
+  for (const [polygons, indices, upward] of [
+    [floorPolygons, floorIndices, false],
+    [topPolygons, topIndices, true],
+  ] as const) {
+    if (polygons.length === 0) continue;
+    const flat = indices.flat();
+    for (const triangle of wasm.triangulate(polygons)) {
+      const [a, b, c] = [flat[triangle[0]], flat[triangle[1]], flat[triangle[2]]];
+      if (upward) emit(a, b, c);
+      else emit(c, b, a);
     }
   }
-  const balls = chain.map(([x, y]) => halfBall.translate([x, y, upperZ]));
-  const hull = wasm.Manifold.hull(balls);
-  balls.forEach((ball) => ball.delete());
-  return [hull];
+
+  const mesh = new wasm.Mesh({
+    numProp: 3,
+    vertProperties: new Float32Array(vertices),
+    triVerts: new Uint32Array(triangles),
+  });
+  const solid = new wasm.Manifold(mesh);
+  if (solid.numVert() === 0) {
+    solid.delete();
+    return null;
+  }
+  return solid;
 }
 
 function sphericalSweep(
@@ -319,44 +407,23 @@ function roundedCavity(
   const seed = rawSeed.simplify();
   closedFootprint.delete();
   rawSeed.delete();
-  const { sphere, halfBall } = filletSphere(wasm, radius);
 
-  const contours = seed.toPolygons();
-  if (contours.length === 1 && isConvex(contours[0])) {
-    const result = sphericalSweep(seed, sphere, height, upperZ);
+  const regions = seed.decompose();
+  if (regions.length === 0) {
+    const empty = seed.extrude(radius);
     seed.delete();
-    return result;
+    return empty;
   }
-
-  // Only the sweep's fillet band, from the floor to the sphere's tangent
-  // height, shapes the cavity; the straight walls above it are a prism. The
-  // band is the seed's area prism plus its boundary swept by the sphere's
-  // lower half, assembled from per-chain hulls instead of area sweeps so the
-  // union's operands hold no redundant interior sphere geometry.
-  const rawCore = seed.extrude(radius);
-  const pieces: Manifold[] = [rawCore.translate([0, 0, floorZ])];
-  rawCore.delete();
-  for (const contour of contours) {
-    for (const chain of convexBoundaryChains(contour)) {
-      pieces.push(...chainBandPieces(wasm, chain, seed, halfBall, upperZ));
-    }
-  }
-  const band = wasm.Manifold.union(pieces);
-  pieces.forEach((piece) => piece.delete());
-  // The wall prism reproduces the band's own top cross-section, so wall and
-  // fillet discretizations agree exactly. Its base sits below the band's cap
-  // by less than the extraction weld grid, so the overlap seam quantizes onto
-  // the cap plane and collapses; it overshoots the open top like partCutter.
-  const seamZ = upperZ - SLIVER_EPSILON / 1000;
-  const wall = band.slice(seamZ);
-  const rawPrism = wall.extrude(height + 1 - seamZ);
-  const prism = rawPrism.translate([0, 0, seamZ]);
-  const result = band.add(prism);
+  const cavities = regions.map((region) => {
+    const swept = sweptRegionMesh(wasm, region, radius, floorZ, height + 1);
+    if (swept) return swept;
+    return sphericalSweep(region, filletSphere(wasm, radius), height, upperZ);
+  });
+  regions.forEach((region) => region.delete());
   seed.delete();
-  wall.delete();
-  rawPrism.delete();
-  prism.delete();
-  band.delete();
+  if (cavities.length === 1) return cavities[0];
+  const result = wasm.Manifold.union(cavities);
+  cavities.forEach((cavity) => cavity.delete());
   return result;
 }
 
