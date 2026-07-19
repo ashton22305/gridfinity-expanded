@@ -13,7 +13,8 @@ import type {
   GenerateGeometryResponse,
 } from '../lib/types';
 
-const DEBOUNCE_MS = 300;
+/** Coalescing window used only while a generation is already in flight. */
+const BUSY_DEBOUNCE_MS = 150;
 const MAX_POOL_SIZE = 4;
 
 export interface GeometryState {
@@ -103,6 +104,11 @@ export function useBinGeometry(design: Design): GeometryState {
   useEffect(() => {
     const revision = ++revisionRef.current;
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    // Generation is fast enough to start immediately when workers are idle;
+    // stale replies are discarded by revision. While a generation is in
+    // flight, coalesce bursts (paint drags, slider drags) so uncancellable
+    // WASM work does not queue up behind the pool.
+    const delay = pendingRef.current ? BUSY_DEBOUNCE_MS : 0;
     debounceRef.current = setTimeout(() => {
       void (async () => {
         setState((current) => ({ ...current, generating: true, error: null }));
@@ -156,7 +162,7 @@ export function useBinGeometry(design: Design): GeometryState {
           workers[index % workers.length]?.postMessage(request);
         });
       })();
-    }, DEBOUNCE_MS);
+    }, delay);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
