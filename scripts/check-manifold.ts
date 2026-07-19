@@ -1,7 +1,12 @@
 /** Production-path manifold and serialized-STL printability gate. */
+import Module from 'manifold-3d';
 import { buildBinParameters } from '../src/lib/binParameters';
 import { trianglesToStl } from '../src/lib/export/stl';
-import { generateGeometry } from '../src/lib/geometry/gridfinity';
+import {
+  generateBandGroupMesh,
+  generateGeometry,
+} from '../src/lib/geometry/gridfinity';
+import type { BandUnionDelegate } from '../src/lib/geometry/gridfinity';
 import { initManifold } from '../src/lib/geometry/manifold';
 import { previewLayout } from '../src/lib/preview';
 import { cutsForPrinter } from '../src/lib/printers';
@@ -335,7 +340,7 @@ const wasm = await initManifold();
 let failed = false;
 for (const fixture of cases) {
   try {
-    const bins = generateGeometry(wasm, buildBinParameters(fixture.value));
+    const bins = await generateGeometry(wasm, buildBinParameters(fixture.value));
     const parts = bins.flatMap((generatedBin) => generatedBin.pieces);
     if (fixture.expectedParts !== undefined && parts.length !== fixture.expectedParts) {
       throw new Error(`expected ${fixture.expectedParts} parts, received ${parts.length}`);
@@ -408,6 +413,72 @@ for (const fixture of cases) {
 }
 
 try {
+  const validationPrinter = {
+    name: 'Parallel validation',
+    bedWidth: 1000,
+    bedDepth: 1000,
+  };
+  const parallelDesign = design([bin('parallel', largeStaircase)], {
+    filletRadius: 5,
+    printer: validationPrinter,
+  });
+  const parameters = buildBinParameters(parallelDesign);
+  const parallelWasm = await Module();
+  const helperWasm = await Module();
+  parallelWasm.setup();
+  helperWasm.setup();
+  const delegate: BandUnionDelegate = async ({ chains, radius, upperZ }) => {
+    const groupCount = 4;
+    const groups = Array.from({ length: groupCount }, (_, index) =>
+      chains.slice(
+        Math.floor(index * chains.length / groupCount),
+        Math.floor((index + 1) * chains.length / groupCount),
+      ));
+    return {
+      localChains: groups[0],
+      helperCount: groupCount - 1,
+      helperMeshes: Promise.resolve(groups.slice(1).map((group) =>
+        generateBandGroupMesh(helperWasm, group, radius, upperZ))),
+    };
+  };
+  const [parallel] = await generateGeometry(parallelWasm, parameters, delegate);
+  const [serial] = await generateGeometry(wasm, parameters);
+  const volume = (triangles: Float32Array) => {
+    let total = 0;
+    for (let index = 0; index < triangles.length; index += 9) {
+      const ax = triangles[index], ay = triangles[index + 1], az = triangles[index + 2];
+      const bx = triangles[index + 3], by = triangles[index + 4], bz = triangles[index + 5];
+      const cx = triangles[index + 6], cy = triangles[index + 7], cz = triangles[index + 8];
+      total += ax * (by * cz - bz * cy) + ay * (bz * cx - bx * cz) +
+        az * (bx * cy - by * cx);
+    }
+    return Math.abs(total / 6);
+  };
+  const parallelReport = analyzeTriangleSoup(parallel.pieces[0].triangles);
+  const parallelStl = stlBoundary(trianglesToStl(parallel.pieces[0].triangles));
+  const serialReport = analyzeTriangleSoup(serial.pieces[0].triangles);
+  const volumeDelta = Math.abs(
+    volume(parallel.pieces[0].triangles) - volume(serial.pieces[0].triangles),
+  );
+  if (parallelReport.boundaryEdges || parallelReport.nonManifoldEdges ||
+    parallelReport.orientationErrors || parallelReport.degenerate ||
+    parallelReport.duplicateFaces || parallelReport.coincidentFaces ||
+    parallelReport.membranes || parallelStl.boundary || parallelStl.nonManifold ||
+    serialReport.boundaryEdges || serialReport.nonManifoldEdges || volumeDelta > 0.01) {
+    throw new Error(
+      `parallel topology or volume mismatch (delta=${volumeDelta.toFixed(6)} mm³)`,
+    );
+  }
+  console.log(
+    'parallel/forced-serial band union'.padEnd(48) +
+    ` ✓ clean (volume delta=${volumeDelta.toFixed(6)} mm³)`,
+  );
+} catch (error) {
+  failed = true;
+  console.log('parallel/forced-serial band union'.padEnd(48) + ` ERROR: ${String(error)}`);
+}
+
+try {
   const orientationDesign = design([
     bin('top', [{ x: 0, y: 0 }]),
     bin('bottom', [{ x: 0, y: 2 }]),
@@ -416,7 +487,7 @@ try {
   if (orientationParameters[0].cells[0].y !== 2 || orientationParameters[1].cells[0].y !== 0) {
     throw new Error('parameter boundary did not mirror the shared occupied Y extent');
   }
-  const orientationBins = generateGeometry(wasm, orientationParameters);
+  const orientationBins = await generateGeometry(wasm, orientationParameters);
   const minY = (triangles: Float32Array) => {
     let value = Number.POSITIVE_INFINITY;
     for (let index = 1; index < triangles.length; index += 3) value = Math.min(value, triangles[index]);
@@ -426,7 +497,7 @@ try {
     throw new Error('geometry did not preserve mirrored generation coordinates');
   }
   const cutDesign = design([bin('bin-1', wideCells, { cuts: wideCuts })], { printer: smallPrinter });
-  const cutBins = generateGeometry(wasm, buildBinParameters(cutDesign));
+  const cutBins = await generateGeometry(wasm, buildBinParameters(cutDesign));
   const previewPieces = previewLayout(cutBins, cutDesign);
   const previewXs = [...new Set(previewPieces.map((piece) => piece.previewOffset.x))].sort((a, b) => a - b);
   if (previewXs.length < 2 || Math.abs(previewXs[1] - previewXs[0] - 0.3) > 1e-6) {

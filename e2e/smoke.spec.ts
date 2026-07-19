@@ -77,8 +77,10 @@ test('reuses cached geometry after reverting parameters and reloading', async ({
     const NativeWorker = window.Worker;
     window.Worker = class CountingWorker extends NativeWorker {
       postMessage(message: unknown, options?: StructuredSerializeOptions | Transferable[]) {
-        const count = Number(localStorage.getItem('geometry-worker-requests') ?? 0) + 1;
-        localStorage.setItem('geometry-worker-requests', String(count));
+        if ((message as { type?: string }).type === 'generate') {
+          const count = Number(localStorage.getItem('geometry-worker-requests') ?? 0) + 1;
+          localStorage.setItem('geometry-worker-requests', String(count));
+        }
         super.postMessage(message, options as StructuredSerializeOptions);
       }
     };
@@ -136,7 +138,9 @@ test('renders geometry when IndexedDB is unavailable', async ({ page }) => {
     Object.defineProperty(window, '__geometryWorkerRequests', { value: 0, writable: true });
     window.Worker = class CountingWorker extends NativeWorker {
       postMessage(message: unknown, options?: StructuredSerializeOptions | Transferable[]) {
-        (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests++;
+        if ((message as { type?: string }).type === 'generate') {
+          (window as typeof window & { __geometryWorkerRequests: number }).__geometryWorkerRequests++;
+        }
         super.postMessage(message, options as StructuredSerializeOptions);
       }
     };
@@ -187,7 +191,9 @@ test('recovers cache access and keeps hits when LRU refresh fails', async ({ pag
     const NativeWorker = window.Worker;
     window.Worker = class CountingWorker extends NativeWorker {
       postMessage(message: unknown, options?: StructuredSerializeOptions | Transferable[]) {
-        testWindow.__geometryWorkerRequests++;
+        if ((message as { type?: string }).type === 'generate') {
+          testWindow.__geometryWorkerRequests++;
+        }
         super.postMessage(message, options as StructuredSerializeOptions);
       }
     };

@@ -111,11 +111,71 @@ export interface BedFitResult {
   rotated: boolean;
 }
 
-export interface GenerateGeometryRequest {
-  revision: number;
-  bins: BinParameters[];
+export type GeometryPolygon = [number, number][];
+
+/** Structured-clone-safe Manifold mesh handoff between independent WASM instances. */
+export interface BandMeshData {
+  numProp: number;
+  vertProperties: Float32Array;
+  triVerts: Uint32Array;
+  mergeFromVert: Uint32Array;
+  mergeToVert: Uint32Array;
+  tolerance: number;
 }
 
-export type GenerateGeometryResponse =
-  | { ok: true; revision: number; bins: Bin[] }
-  | { ok: false; revision: number; error: string };
+export type GeometryWorkerRequest =
+  | { type: 'generate'; revision: number; bins: BinParameters[] }
+  | {
+    type: 'run-band-group';
+    revision: number;
+    bandId: string;
+    groupId: string;
+    radius: number;
+    upperZ: number;
+    chains: GeometryPolygon[];
+  }
+  | {
+    type: 'band-allocation';
+    revision: number;
+    bandId: string;
+    localChains: GeometryPolygon[];
+    helperGroupIds: string[];
+  }
+  | {
+    type: 'band-result';
+    revision: number;
+    bandId: string;
+    groupId: string;
+    ok: true;
+    mesh: BandMeshData;
+  }
+  | {
+    type: 'band-result';
+    revision: number;
+    bandId: string;
+    groupId: string;
+    ok: false;
+    error: string;
+  }
+  | { type: 'cancel'; revision: number };
+
+export type GeometryWorkerResponse =
+  | { type: 'generation-complete'; revision: number; bins: Bin[] }
+  | { type: 'generation-failure'; revision: number; error: string }
+  | {
+    type: 'band-group-request';
+    revision: number;
+    bandId: string;
+    radius: number;
+    upperZ: number;
+    chains: GeometryPolygon[];
+  }
+  | {
+    type: 'band-group-result';
+    revision: number;
+    bandId: string;
+    groupId: string;
+    mesh: BandMeshData;
+  }
+  | { type: 'band-group-failure'; revision: number; bandId: string; groupId: string }
+  | { type: 'band-group-cancel'; revision: number; bandId: string };

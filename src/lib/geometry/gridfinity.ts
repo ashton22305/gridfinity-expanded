@@ -4,11 +4,13 @@ import {
   GRIDFINITY_SPEC,
 } from '../gridfinitySpec';
 import type {
+  BandMeshData,
   Bin,
   BinParameters,
   Cell,
   Edge,
   FastenerSettings,
+  GeometryPolygon,
   Wall,
 } from '../types';
 import { manifoldTriangles } from './manifold';
@@ -20,7 +22,22 @@ const FILLET_SEGMENTS = 32;
 const CAVITY_SPHERE_SEGMENTS = 16;
 /** Collapses sub-micron boolean slivers; far below visible or sliceable size. */
 const SLIVER_EPSILON = 1e-3;
-type Polygon = [number, number][];
+type Polygon = GeometryPolygon;
+
+export interface BandUnionRequest {
+  chains: GeometryPolygon[];
+  radius: number;
+  upperZ: number;
+}
+
+export interface BandUnionAllocation {
+  localChains: GeometryPolygon[];
+  helperCount: number;
+  helperMeshes: Promise<BandMeshData[]>;
+}
+
+export type BandUnionDelegate =
+  (request: BandUnionRequest) => Promise<BandUnionAllocation>;
 
 function roundedRect(
   wasm: ManifoldToplevel,
@@ -297,13 +314,11 @@ function convexBoundaryChains(contour: Polygon): Polygon[] {
  * Runs whose pocket escapes the seed — wrapped loops, chords crossing holes
  * or nearby boundary — split until exact; a single segment has no pocket.
  */
-function chainBandPieces(
+function exactBoundaryChains(
   wasm: ManifoldToplevel,
   chain: Polygon,
   seed: CrossSection,
-  halfBall: Manifold,
-  upperZ: number,
-): Manifold[] {
+): Polygon[] {
   if (chain.length > 2) {
     const pocket = signedArea(chain) < 0 ? [...chain].reverse() : chain;
     const pocketSection = new wasm.CrossSection([pocket]);
@@ -314,15 +329,60 @@ function chainBandPieces(
     if (escapes) {
       const middle = chain.length >> 1;
       return [
-        ...chainBandPieces(wasm, chain.slice(0, middle + 1), seed, halfBall, upperZ),
-        ...chainBandPieces(wasm, chain.slice(middle), seed, halfBall, upperZ),
+        ...exactBoundaryChains(wasm, chain.slice(0, middle + 1), seed),
+        ...exactBoundaryChains(wasm, chain.slice(middle), seed),
       ];
     }
   }
-  const balls = chain.map(([x, y]) => halfBall.translate([x, y, upperZ]));
-  const hull = wasm.Manifold.hull(balls);
-  balls.forEach((ball) => ball.delete());
-  return [hull];
+  return [chain];
+}
+
+function buildBandChainHulls(
+  wasm: ManifoldToplevel,
+  chains: Polygon[],
+  halfBall: Manifold,
+  upperZ: number,
+): Manifold[] {
+  return chains.map((chain) => {
+    const balls = chain.map(([x, y]) => halfBall.translate([x, y, upperZ]));
+    const hull = wasm.Manifold.hull(balls);
+    balls.forEach((ball) => ball.delete());
+    return hull;
+  });
+}
+
+function buildBandChainGroup(
+  wasm: ManifoldToplevel,
+  chains: Polygon[],
+  halfBall: Manifold,
+  upperZ: number,
+): Manifold {
+  const hulls = buildBandChainHulls(wasm, chains, halfBall, upperZ);
+  const group = wasm.Manifold.union(hulls);
+  hulls.forEach((hull) => hull.delete());
+  group.numVert();
+  return group;
+}
+
+/** Build a helper group's evaluated mesh for transfer to another WASM instance. */
+export function generateBandGroupMesh(
+  wasm: ManifoldToplevel,
+  chains: GeometryPolygon[],
+  radius: number,
+  upperZ: number,
+): BandMeshData {
+  const group = buildBandChainGroup(wasm, chains, filletSphere(wasm, radius).halfBall, upperZ);
+  const mesh = group.getMesh();
+  const data: BandMeshData = {
+    numProp: mesh.numProp,
+    vertProperties: mesh.vertProperties.slice(),
+    triVerts: mesh.triVerts.slice(),
+    mergeFromVert: mesh.mergeFromVert.slice(),
+    mergeToVert: mesh.mergeToVert.slice(),
+    tolerance: mesh.tolerance,
+  };
+  group.delete();
+  return data;
 }
 
 function sphericalSweep(
@@ -339,12 +399,13 @@ function sphericalSweep(
   return result;
 }
 
-function roundedCavity(
+async function roundedCavity(
   wasm: ManifoldToplevel,
   footprint: CrossSection,
   radius: number,
   height: number,
-): Manifold {
+  bandUnion?: BandUnionDelegate,
+): Promise<Manifold> {
   const floorZ = GRIDFINITY_SPEC.baseHeight + GRIDFINITY_SPEC.floorThickness;
   if (radius === 0) {
     return footprint.extrude(height - floorZ).translate([0, 0, floorZ]);
@@ -375,17 +436,51 @@ function roundedCavity(
   let band = bandCache.get(bandKey);
   if (!band) {
     const rawCore = seed.extrude(radius);
-    const pieces: Manifold[] = [rawCore.translate([0, 0, floorZ])];
+    const core = rawCore.translate([0, 0, floorZ]);
     rawCore.delete();
+    const chains: Polygon[] = [];
     for (const contour of contours) {
       for (const chain of convexBoundaryChains(contour)) {
-        pieces.push(...chainBandPieces(wasm, chain, seed, halfBall, upperZ));
+        chains.push(...exactBoundaryChains(wasm, chain, seed));
       }
     }
-    band = wasm.Manifold.union(pieces);
-    pieces.forEach((piece) => piece.delete());
+    let parallelComplete = false;
+    if (bandUnion && chains.length >= 20) {
+      const sorted = [...chains].sort((first, second) => {
+        const centroid = (chain: Polygon) =>
+          chain.reduce((total, [x]) => total + x, 0) / chain.length;
+        return centroid(first) - centroid(second);
+      });
+      let localGroup: Manifold | null = null;
+      let helpers: Manifold[] = [];
+      try {
+        const allocation = await bandUnion({ chains: sorted, radius, upperZ });
+        if (allocation.helperCount > 0) {
+          localGroup = buildBandChainGroup(wasm, allocation.localChains, halfBall, upperZ);
+          const meshes = await allocation.helperMeshes;
+          helpers = meshes.map((meshData) => wasm.Manifold.ofMesh(new wasm.Mesh(meshData)));
+          helpers.forEach((helper) => helper.numVert());
+          band = wasm.Manifold.union([core, localGroup, ...helpers]);
+          parallelComplete = true;
+        }
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') throw error;
+        // A helper timeout/error regenerates the complete band serially below.
+      } finally {
+        localGroup?.delete();
+        helpers.forEach((helper) => helper.delete());
+      }
+    }
+    if (!parallelComplete) {
+      const hulls = buildBandChainHulls(wasm, chains, halfBall, upperZ);
+      band = wasm.Manifold.union([core, ...hulls]);
+      hulls.forEach((hull) => hull.delete());
+    }
+    core.delete();
+    if (!band) throw new Error('Unable to build cavity fillet band.');
     bandCache.set(bandKey, band);
   }
+  if (!band) throw new Error('Unable to retrieve cavity fillet band.');
   // The wall prism reproduces the band's own top cross-section, so wall and
   // fillet discretizations agree exactly. Its base sits below the band's cap
   // by less than the extraction weld grid, so the overlap seam quantizes onto
@@ -447,11 +542,12 @@ function hardwareCutters(
   ])));
 }
 
-function buildBinSolid(
+async function buildBinSolid(
   wasm: ManifoldToplevel,
   bin: BinParameters,
   base: Manifold,
-): Manifold {
+  bandUnion?: BandUnionDelegate,
+): Promise<Manifold> {
   const footprint = cellFootprint(wasm, bin.cells);
   const bases = bin.cells.map((cell) => base.translate([
     cell.x * PITCH + PITCH / 2,
@@ -462,11 +558,12 @@ function buildBinSolid(
     .extrude(bin.height - BASE.height)
     .translate([0, 0, BASE.height]);
   let solid = wasm.Manifold.union([...bases, body]);
-  solid = solid.subtract(roundedCavity(
+  solid = solid.subtract(await roundedCavity(
     wasm,
     cavityFootprint(wasm, bin, footprint, bin.perimeterThickness),
     bin.filletRadius,
     bin.height,
+    bandUnion,
   ));
   const cutters = hardwareCutters(wasm, bin.fasteners, bin.cells);
   if (cutters.length > 0) solid = solid.subtract(wasm.Manifold.union(cutters));
@@ -498,20 +595,22 @@ function partCutter(
 }
 
 /** Build finished solids from trusted parameters and return cut pieces grouped per bin. */
-export function generateGeometry(
+export async function generateGeometry(
   wasm: ManifoldToplevel,
   bins: BinParameters[],
-): Bin[] {
+  bandUnion?: BandUnionDelegate,
+): Promise<Bin[]> {
   const base = canonicalBase(wasm);
-  return bins.map((bin) => {
+  const generated: Bin[] = [];
+  for (const bin of bins) {
     const solidCache = constantsFor(wasm).finishedSolids;
     const key = finishedSolidKey(bin);
     let solid = solidCache.get(key);
     if (!solid) {
-      solid = buildBinSolid(wasm, bin, base);
+      solid = await buildBinSolid(wasm, bin, base, bandUnion);
       solidCache.set(key, solid);
     }
-    return {
+    generated.push({
       binId: bin.binId,
       pieces: bin.pieces.map((cells) => {
         const piece = bin.pieces.length === 1
@@ -522,6 +621,7 @@ export function generateGeometry(
           cells,
         };
       }),
-    };
-  });
+    });
+  }
+  return generated;
 }
