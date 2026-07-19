@@ -25,6 +25,7 @@ export function ShapeTab() {
   const paintCell = useAppStore((state) => state.paintCell);
   const removeSelectedCell = useAppStore((state) => state.removeSelectedCell);
   const setGridSize = useAppStore((state) => state.setGridSize);
+  const setGestureActive = useAppStore((state) => state.setGestureActive);
   const [paintMode, setPaintMode] = useState<'add' | 'remove' | null>(null);
   const paintBinId = useRef<string | null>(null);
 
@@ -34,6 +35,7 @@ export function ShapeTab() {
 
   function handlePointerDown(x: number, y: number) {
     const cell = { x, y };
+    setGestureActive(true);
     if (cellBin.get(cellKey(cell)) === selectedBinId) {
       setPaintMode('remove');
       removeSelectedCell(cell);
@@ -55,6 +57,7 @@ export function ShapeTab() {
   function endPaint() {
     setPaintMode(null);
     paintBinId.current = null;
+    setGestureActive(false);
   }
 
   function cellFromEvent(event: React.PointerEvent): { x: number; y: number } | null {
