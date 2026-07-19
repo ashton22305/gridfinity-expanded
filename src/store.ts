@@ -109,6 +109,9 @@ interface AppState {
   gridCols: number;
   gridRows: number;
   panelWidths: Record<PanelSide, number>;
+  /** True while a spatial edit gesture is held; generation waits for release. */
+  gestureActive: boolean;
+  setGestureActive: (active: boolean) => void;
   selectBin: (id: string) => void;
   startNewBin: () => void;
   paintCell: (cell: Cell, targetBinId?: string) => void;
@@ -137,6 +140,9 @@ export const useAppStore = create<AppState>((set) => ({
   gridCols: 7,
   gridRows: 7,
   panelWidths: DEFAULT_PANEL_WIDTHS,
+  gestureActive: false,
+
+  setGestureActive: (active) => set({ gestureActive: active }),
 
   selectBin: (id) => set({ selectedBinId: id }),
 

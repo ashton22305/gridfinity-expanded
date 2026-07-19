@@ -14,7 +14,8 @@ const BabylonViewer = lazy(() => import('./components/viewer/BabylonViewer').the
 export default function App() {
   const design = useAppStore((s) => s.design);
   const panelWidths = useAppStore((s) => s.panelWidths);
-  const { bins, design: generatedDesign, generating, error } = useBinGeometry(design);
+  const gestureActive = useAppStore((s) => s.gestureActive);
+  const { bins, design: generatedDesign, generating, error } = useBinGeometry(design, gestureActive);
 
   return (
     <AppShell
