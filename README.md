@@ -13,6 +13,8 @@ npm run dev
 
 Required validation commands are documented in [`AGENTS.md`](./AGENTS.md).
 
-## Geometry documentation
+## Architecture documentation
 
-[`docs/geometry-pipeline.md`](./docs/geometry-pipeline.md) is the canonical specification and architecture record. It documents the Gridfinity dimensions and sources, trusted-input contract, shape/wall/cut ownership, solid construction, direct preview, STL export, and printability gates.
+Start with [`docs/application-architecture.md`](./docs/application-architecture.md) for the end-to-end application design, ownership, execution boundaries, caching, concurrency, preview, and export flows. [`docs/object-method-reference.md`](./docs/object-method-reference.md) is the comprehensive reference for runtime components, hooks, functions, objects, callbacks, and external instances used by the application.
+
+[`docs/geometry-pipeline.md`](./docs/geometry-pipeline.md) remains the canonical geometry specification and architecture record. It documents the Gridfinity dimensions and sources, trusted-input contract, shape/wall/cut ownership, solid construction, direct preview, STL export, and printability gates. [`docs/babylon-viewer.md`](./docs/babylon-viewer.md) records viewer-specific mechanics.
