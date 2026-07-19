@@ -11,16 +11,17 @@ For the architectural narrative, see [Application Architecture](./application-ar
 - **Context** names the main browser thread, geometry worker, or either environment.
 - **Calls / effects** lists direct important relationships, including browser or library effects.
 - **Lifetime / performance** records ownership, reuse, copying, mutation, and allocation relevance without implying measured speed.
+- **Why it exists / application goal** makes the architectural justification explicit: it connects that row's concrete role to designing a valid bin, generating it responsively, previewing it accurately, or exporting it for printing.
 - Anonymous render callbacks and inline event handlers appear under their owning component rather than as invented global symbols.
 
 ## Entry and composition
 
-| Symbol | Context and responsibility | Calls / effects | Lifetime / performance |
-| --- | --- | --- | --- |
-| `main.tsx` module body | Main-thread entry point. | `document.getElementById`, React DOM `createRoot(...).render(...)`; mounts `StrictMode` → `MantineProvider(theme)` → `App`. | Runs once per module evaluation. React development `StrictMode` may replay lifecycle work. The returned React root is not retained by application code. |
-| `App` | Root function component and dependency-injection point for design, generation, preview, and export. | Selects `design`, `panelWidths`, and `gestureActive` with `useAppStore`; calls `useBinGeometry`; renders Mantine `AppShell`, editors, `ExportMenu`, resize handles, and lazy `BabylonViewer`. | Renders on selected store values or geometry state changes. It passes the exact generated design snapshot to the viewer. |
-| lazy `BabylonViewer` loader | `App.tsx` module-owned React lazy component. | Dynamic-imports `BabylonViewer.tsx` and maps its named export to `default`; `Suspense` renders a status fallback until resolved. | Module lifetime; creates a separate asynchronous module/chunk boundary and a one-time promise managed by React. |
-| `theme` | Mantine theme configuration object created by `createTheme`. | Uses each Mantine component's static `extend` method to define default props/styles for `Button`, `NumberInput`, `Select`, `Slider`, `Switch`, `Tabs`, `Alert`, `Menu`, and `Text`. | Created at module evaluation and shared through `MantineProvider`; no application mutation. |
+| Symbol | Context and responsibility | Calls / effects | Lifetime / performance | Why it exists / application goal |
+| --- | --- | --- | --- | --- |
+| `main.tsx` module body | Main-thread entry point. | `document.getElementById`, React DOM `createRoot(...).render(...)`; mounts `StrictMode` → `MantineProvider(theme)` → `App`. | Runs once per module evaluation. React development `StrictMode` may replay lifecycle work. The returned React root is not retained by application code. | Its role—main-thread entry point—connects browser startup to the editing, generation, preview, and export workflow. |
+| `App` | Root function component and dependency-injection point for design, generation, preview, and export. | Selects `design`, `panelWidths`, and `gestureActive` with `useAppStore`; calls `useBinGeometry`; renders Mantine `AppShell`, editors, `ExportMenu`, resize handles, and lazy `BabylonViewer`. | Renders on selected store values or geometry state changes. It passes the exact generated design snapshot to the viewer. | Its role—root function component and dependency-injection point for design, generation, preview, and export—connects browser startup to the editing, generation, preview, and export workflow. |
+| lazy `BabylonViewer` loader | `App.tsx` module-owned React lazy component. | Dynamic-imports `BabylonViewer.tsx` and maps its named export to `default`; `Suspense` renders a status fallback until resolved. | Module lifetime; creates a separate asynchronous module/chunk boundary and a one-time promise managed by React. | Its role—`App.tsx` module-owned React lazy component—connects browser startup to the editing, generation, preview, and export workflow. |
+| `theme` | Mantine theme configuration object created by `createTheme`. | Uses each Mantine component's static `extend` method to define default props/styles for `Button`, `NumberInput`, `Select`, `Slider`, `Switch`, `Tabs`, `Alert`, `Menu`, and `Text`. | Created at module evaluation and shared through `MantineProvider`; no application mutation. | Its role—mantine theme configuration object created by `createTheme`—connects browser startup to the editing, generation, preview, and export workflow. |
 
 `App` contains no event handlers. Its `Suspense` fallback is an inline React element only. Header export always receives the most recently published bins, while the viewer additionally receives the producing design and current generation error.
 
@@ -28,83 +29,83 @@ For the architectural narrative, see [Application Architecture](./application-ar
 
 ### Store objects and private helpers
 
-| Symbol | Context and responsibility | Calls / effects | Lifetime / performance |
-| --- | --- | --- | --- |
-| `PanelSide` | Type-only union for `sidebar` and `settings`. | Keys panel-width state and `setPanelWidth`. | Erased at runtime. |
-| `PANEL_MIN_WIDTH`, `PANEL_MAX_WIDTH`, `MAX_GRID` | Exported UI bounds. | Used by store commands and editor inputs. | Module constants. |
-| `DEFAULT_PANEL_WIDTHS` | Initial `Record<PanelSide, number>`. | Seeds `AppState.panelWidths`. | Module object; store later replaces it on width edits. |
-| `DEFAULT_PRINTER` | Default profile selected from `PRINTER_PROFILES` by `DESIGN_DEFAULTS.printerName`. | Seeds `DEFAULT_DESIGN`. | Module reference; asserted present. |
-| `sortCells` | Private deterministic row-then-column copy/sort. | Called by `resetForShape`. | Allocates a new array; does not mutate input. |
-| `emptyBin` | Private `BinDesign` creator with empty arrays. | Used for defaults and new painted bins. | Allocates independent wrapper/arrays per call. |
-| `resetForShape` | Rebuilds a changed bin footprint and clears dependent openings/walls. | Calls `sortCells` and `cutsForPrinter`. | Allocates a bin and arrays; retains unrelated scalar fields/id. |
-| `nextBinId` | Finds the first unused `bin-N` id. | Builds an id `Set`. Called by `startNewBin` and disconnected `paintCell`. | Linear scan/allocation per call; ids may be reused after deletion. |
-| `isEdgeConnected` | Tests whether a candidate cell shares one unit edge with any cell. | Used by `paintCell` at gesture targeting. | Linear, read-only. |
-| `cutOrientation`, `cutCenter` | Private cut navigation projections. | Used by `moveCut` to compare candidate directions/distances. | `cutCenter` allocates a point. |
-| `binPartsFit` | Tests every current part against a printer. | `partitionCells` → `checkBedFit`; used by `setPrinter`. | Allocates partition results; short-circuits on first failure. |
-| `initialCells` | Four-cell default footprint. | Embedded in `DEFAULT_DESIGN`. | Module array; normal commands replace rather than mutate it. |
-| `DEFAULT_DESIGN` | Exported initial plain `Design`. | Initializes store and selected id. | Module object graph; nested fastener/printer objects are copied from defaults. |
-| `minGridSize` | Returns minimum editor grid dimensions covering all cells, with a 4×4 floor. | Used by `ShapeTab` and `setGridSize`. | Allocates one result; scans cells. |
-| `AppState` | Type-only complete store contract. | Describes design/session fields and commands below. | Erased; Zustand owns the runtime state object for page lifetime. |
-| `useAppStore` | Zustand hook plus static `getState`. | Created with `create<AppState>` and a setter-backed initializer. Components subscribe through selectors; `ShapeTab` uses `getState()` after painting to capture the resolved target id. | Module singleton. Commands use immutable replacements; selector granularity controls render propagation. |
+| Symbol | Context and responsibility | Calls / effects | Lifetime / performance | Why it exists / application goal |
+| --- | --- | --- | --- | --- |
+| `PanelSide` | Type-only union for `sidebar` and `settings`. | Keys panel-width state and `setPanelWidth`. | Erased at runtime. | Its role—type-only union for `sidebar` and `settings`—keeps panel resizing type-safe so the workspace remains usable while editing. |
+| `PANEL_MIN_WIDTH`, `PANEL_MAX_WIDTH`, `MAX_GRID` | Exported UI bounds. | Used by store commands and editor inputs. | Module constants. | Its role—exported UI bounds—keeps editable state deterministic and ready for valid geometry derivation. |
+| `DEFAULT_PANEL_WIDTHS` | Initial `Record<PanelSide, number>`. | Seeds `AppState.panelWidths`. | Module object; store later replaces it on width edits. | Its role—initial `Record<PanelSide, number>`—keeps editable state deterministic and ready for valid geometry derivation. |
+| `DEFAULT_PRINTER` | Default profile selected from `PRINTER_PROFILES` by `DESIGN_DEFAULTS.printerName`. | Seeds `DEFAULT_DESIGN`. | Module reference; asserted present. | Its role—default profile selected from `PRINTER_PROFILES` by `DESIGN_DEFAULTS.printerName`—keeps editable state deterministic and ready for valid geometry derivation. |
+| `sortCells` | Private deterministic row-then-column copy/sort. | Called by `resetForShape`. | Allocates a new array; does not mutate input. | Its role—private deterministic row-then-column copy/sort—keeps editable state deterministic and ready for valid geometry derivation. |
+| `emptyBin` | Private `BinDesign` creator with empty arrays. | Used for defaults and new painted bins. | Allocates independent wrapper/arrays per call. | Its role—private `BinDesign` creator with empty arrays—keeps editable state deterministic and ready for valid geometry derivation. |
+| `resetForShape` | Rebuilds a changed bin footprint and clears dependent openings/walls. | Calls `sortCells` and `cutsForPrinter`. | Allocates a bin and arrays; retains unrelated scalar fields/id. | Its role—rebuilds a changed bin footprint and clears dependent openings/walls—keeps editable state deterministic and ready for valid geometry derivation. |
+| `nextBinId` | Finds the first unused `bin-N` id. | Builds an id `Set`. Called by `startNewBin` and disconnected `paintCell`. | Linear scan/allocation per call; ids may be reused after deletion. | Its role—finds the first unused `bin-N` id—keeps editable state deterministic and ready for valid geometry derivation. |
+| `isEdgeConnected` | Tests whether a candidate cell shares one unit edge with any cell. | Used by `paintCell` at gesture targeting. | Linear, read-only. | Its role—tests whether a candidate cell shares one unit edge with any cell—keeps editable state deterministic and ready for valid geometry derivation. |
+| `cutOrientation`, `cutCenter` | Private cut navigation projections. | Used by `moveCut` to compare candidate directions/distances. | `cutCenter` allocates a point. | Its role—private cut navigation projections—keeps editable state deterministic and ready for valid geometry derivation. |
+| `binPartsFit` | Tests every current part against a printer. | `partitionCells` → `checkBedFit`; used by `setPrinter`. | Allocates partition results; short-circuits on first failure. | Its role—tests every current part against a printer—keeps editable state deterministic and ready for valid geometry derivation. |
+| `initialCells` | Four-cell default footprint. | Embedded in `DEFAULT_DESIGN`. | Module array; normal commands replace rather than mutate it. | Its role—four-cell default footprint—keeps editable state deterministic and ready for valid geometry derivation. |
+| `DEFAULT_DESIGN` | Exported initial plain `Design`. | Initializes store and selected id. | Module object graph; nested fastener/printer objects are copied from defaults. | Its role—exported initial plain `Design`—keeps editable state deterministic and ready for valid geometry derivation. |
+| `minGridSize` | Returns minimum editor grid dimensions covering all cells, with a 4×4 floor. | Used by `ShapeTab` and `setGridSize`. | Allocates one result; scans cells. | Its role—returns minimum editor grid dimensions covering all cells, with a 4×4 floor—keeps editable state deterministic and ready for valid geometry derivation. |
+| `AppState` | Type-only complete store contract. | Describes design/session fields and commands below. | Erased; Zustand owns the runtime state object for page lifetime. | Its role—type-only complete store contract—keeps editable state deterministic and ready for valid geometry derivation. |
+| `useAppStore` | Zustand hook plus static `getState`. | Created with `create<AppState>` and a setter-backed initializer. Components subscribe through selectors; `ShapeTab` uses `getState()` after painting to capture the resolved target id. | Module singleton. Commands use immutable replacements; selector granularity controls render propagation. | Its role—zustand hook plus static `getState`—keeps editable state deterministic and ready for valid geometry derivation. |
 
 ### Store commands
 
 Every command runs on the main thread. Commands passed a functional updater receive the latest store state; no command mutates an existing `Design`, bin, or nested array in place.
 
-| Command | State effect and direct calls | Allocation / behavior notes |
-| --- | --- | --- |
-| `setGestureActive(active)` | Replaces `gestureActive`. | Used to hold generation during shape painting. |
-| `selectBin(id)` | Replaces `selectedBinId`. | Does not validate existence; a pending new id represents “new bin” mode. |
-| `startNewBin()` | Sets selection to `nextBinId(design.bins)`. | Creates no empty bin until a cell is painted. |
-| `paintCell(cell, targetBinId?)` | Finds the current cell owner, resolves an edge-connected or new target, removes the cell from its former owner, adds it to target, calls `resetForShape` on affected bins, removes empty bins, and selects target. | Rebuilds the bins array and affected bin dependencies. Returns existing state for an already-owned target cell. Explicit target keeps a drag in one bin. |
-| `removeSelectedCell(cell)` | Removes a matching cell from the selected bin via `resetForShape`; filters empty bins. | Rebuilds design/bins even when no matching cell is found. |
-| `setHeightUnits`, `setPerimeterThickness`, `setFilletRadius` | Replace one global design scalar. | `DimensionsTab`, not the store, coordinates height-dependent fillet validity. |
-| `setFasteners(patch)` | Shallow-merges a partial patch into `design.fasteners`. | Allocates design and fastener objects. |
-| `setPrinter(printer)` | Replaces printer; retains bins whose current pieces fit and otherwise calls `cutsForPrinter` preserving existing cuts. | May partition/check every bin and add cuts; allocates design/bins array. |
-| `setOpeningState(edges, open)` | For each bin, filters input to its perimeter edges and opens or closes them by key. | Builds per-bin cell/key sets; sorts opened edges. Present runtime API with no current UI caller. |
-| `toggleOpening(edge)` | Finds every bin for which the coincident edge is perimeter, chooses one shared open/closed result, and updates all bordering bins. | Preserves coincident-bin semantics; allocates sets/arrays and design wrappers. |
-| `resetSelectedWalls()` | Closes perimeter openings belonging to the selected bin footprint across all bins and clears only the selected bin's free-form walls. | Uses `perimeterEdges`; allocates every bin wrapper, even unchanged ones. |
-| `addWall(wall)` | Appends a wall to the selected bin. | Stores the supplied plain wall reference; creates array/bin/design wrappers. |
-| `updateWall(index, patch)` | Shallow-merges patch into the indexed selected-bin wall. | Maps walls and bins; out-of-range index leaves wall values unchanged but still rebuilds wrappers. |
-| `removeWall(index)` | Filters the indexed selected-bin wall. | Creates replacement arrays/wrappers. |
-| `toggleCut(binId, cut)` | Replaces the target bin's cuts with library `toggleCut`. | Canonicalizes, deduplicates, and sorts through the helper. |
-| `moveCut(binId, index, direction)` | Finds same-orientation available cuts; locates current or nearest candidate; clamps one step; removes old and inserts/sorts new. | Computes maps/distances and candidate arrays; returns a bin unchanged at limits or on invalid input. |
-| `resetCuts(binId)` | Replaces target cuts with printer-required `cutsForPrinter`. | Discards optional user cuts. |
-| `setGridSize(cols, rows)` | Clamps rounded values between occupied `minGridSize` and `MAX_GRID`. | Session UI only; does not change design geometry. |
-| `setPanelWidth(panel, width)` | Clamps rounded width between panel bounds and replaces keyed `panelWidths`. | Session UI only. |
+| Command | State effect and direct calls | Allocation / behavior notes | Why it exists / application goal |
+| --- | --- | --- | --- |
+| `setGestureActive(active)` | Replaces `gestureActive`. | Used to hold generation during shape painting. | Its role—replaces `gestureActive`—turns user intent into coherent store snapshots that can regenerate the model. |
+| `selectBin(id)` | Replaces `selectedBinId`. | Does not validate existence; a pending new id represents “new bin” mode. | Its role—replaces `selectedBinId`—turns user intent into coherent store snapshots that can regenerate the model. |
+| `startNewBin()` | Sets selection to `nextBinId(design.bins)`. | Creates no empty bin until a cell is painted. | Its role—sets selection to `nextBinId(design.bins)`—turns user intent into coherent store snapshots that can regenerate the model. |
+| `paintCell(cell, targetBinId?)` | Finds the current cell owner, resolves an edge-connected or new target, removes the cell from its former owner, adds it to target, calls `resetForShape` on affected bins, removes empty bins, and selects target. | Rebuilds the bins array and affected bin dependencies. Returns existing state for an already-owned target cell. Explicit target keeps a drag in one bin. | Its role—finds the current cell owner, resolves an edge-connected or new target, removes the cell from its former owner, adds it to target, calls `resetForShape` on affected bins, removes empty bins, and selects target—turns user intent into coherent store snapshots that can regenerate the model. |
+| `removeSelectedCell(cell)` | Removes a matching cell from the selected bin via `resetForShape`; filters empty bins. | Rebuilds design/bins even when no matching cell is found. | Its role—removes a matching cell from the selected bin via `resetForShape`; filters empty bins—turns user intent into coherent store snapshots that can regenerate the model. |
+| `setHeightUnits`, `setPerimeterThickness`, `setFilletRadius` | Replace one global design scalar. | `DimensionsTab`, not the store, coordinates height-dependent fillet validity. | Its role—replace one global design scalar—turns user intent into coherent store snapshots that can regenerate the model. |
+| `setFasteners(patch)` | Shallow-merges a partial patch into `design.fasteners`. | Allocates design and fastener objects. | Its role—shallow-merges a partial patch into `design.fasteners`—turns user intent into coherent store snapshots that can regenerate the model. |
+| `setPrinter(printer)` | Replaces printer; retains bins whose current pieces fit and otherwise calls `cutsForPrinter` preserving existing cuts. | May partition/check every bin and add cuts; allocates design/bins array. | Its role—replaces printer; retains bins whose current pieces fit and otherwise calls `cutsForPrinter` preserving existing cuts—turns user intent into coherent store snapshots that can regenerate the model. |
+| `setOpeningState(edges, open)` | For each bin, filters input to its perimeter edges and opens or closes them by key. | Builds per-bin cell/key sets; sorts opened edges. Present runtime API with no current UI caller. | Its role—for each bin, filters input to its perimeter edges and opens or closes them by key—turns user intent into coherent store snapshots that can regenerate the model. |
+| `toggleOpening(edge)` | Finds every bin for which the coincident edge is perimeter, chooses one shared open/closed result, and updates all bordering bins. | Preserves coincident-bin semantics; allocates sets/arrays and design wrappers. | Its role—finds every bin for which the coincident edge is perimeter, chooses one shared open/closed result, and updates all bordering bins—turns user intent into coherent store snapshots that can regenerate the model. |
+| `resetSelectedWalls()` | Closes perimeter openings belonging to the selected bin footprint across all bins and clears only the selected bin's free-form walls. | Uses `perimeterEdges`; allocates every bin wrapper, even unchanged ones. | Its role—closes perimeter openings belonging to the selected bin footprint across all bins and clears only the selected bin's free-form walls—turns user intent into coherent store snapshots that can regenerate the model. |
+| `addWall(wall)` | Appends a wall to the selected bin. | Stores the supplied plain wall reference; creates array/bin/design wrappers. | Its role—appends a wall to the selected bin—turns user intent into coherent store snapshots that can regenerate the model. |
+| `updateWall(index, patch)` | Shallow-merges patch into the indexed selected-bin wall. | Maps walls and bins; out-of-range index leaves wall values unchanged but still rebuilds wrappers. | Its role—shallow-merges patch into the indexed selected-bin wall—turns user intent into coherent store snapshots that can regenerate the model. |
+| `removeWall(index)` | Filters the indexed selected-bin wall. | Creates replacement arrays/wrappers. | Its role—filters the indexed selected-bin wall—turns user intent into coherent store snapshots that can regenerate the model. |
+| `toggleCut(binId, cut)` | Replaces the target bin's cuts with library `toggleCut`. | Canonicalizes, deduplicates, and sorts through the helper. | Its role—replaces the target bin's cuts with library `toggleCut`—turns user intent into coherent store snapshots that can regenerate the model. |
+| `moveCut(binId, index, direction)` | Finds same-orientation available cuts; locates current or nearest candidate; clamps one step; removes old and inserts/sorts new. | Computes maps/distances and candidate arrays; returns a bin unchanged at limits or on invalid input. | Its role—finds same-orientation available cuts; locates current or nearest candidate; clamps one step; removes old and inserts/sorts new—turns user intent into coherent store snapshots that can regenerate the model. |
+| `resetCuts(binId)` | Replaces target cuts with printer-required `cutsForPrinter`. | Discards optional user cuts. | Its role—replaces target cuts with printer-required `cutsForPrinter`—turns user intent into coherent store snapshots that can regenerate the model. |
+| `setGridSize(cols, rows)` | Clamps rounded values between occupied `minGridSize` and `MAX_GRID`. | Session UI only; does not change design geometry. | It preserves enough editor space for every occupied cell while letting users choose a workable canvas for shaping the design. |
+| `setPanelWidth(panel, width)` | Clamps rounded width between panel bounds and replaces keyed `panelWidths`. | Session UI only. | It makes the editing and settings workspace adaptable without allowing either panel to become unusable. |
 
 ## Shared structured objects
 
 All interfaces and type aliases below are erased after compilation. Their runtime values are plain objects/arrays unless a field explicitly names a typed array, map, or set.
 
-| Object/type | Fields; creator → owner → transformations/consumers | Lifetime, mutation, cloning |
-| --- | --- | --- |
-| `Cell` | `{x, y}` grid coordinate. Created by defaults, editors, edge/cut helpers, mirroring, and cache clones; stored in bin footprints and piece groups; consumed throughout planning and geometry. | Usually copied into new arrays/objects. Structured-cloned to workers/IndexedDB. |
-| `Point2` | `{x, y}` generic point; `GridPoint` is a type-only extension with no extra fields. | Wall/cut/preview/editor helpers allocate points; no methods. |
-| `EdgeOrientation`, `Edge`, `EdgeKind` | `'h'|'v'`; edge `{x,y,orientation}`; classification `'perimeter'|'internal'|'none'`. | Store owns opening edges; mirrored copies enter workers. |
-| `Wall` | `{start,end,width}` in editor millimetres. Created by `WallsTab`, stored by the selected bin, mirrored by `buildBinParameters`, consumed by geometry. | Draft is locally replaced during drag; stored walls are immutably replaced; worker requests clone them. |
-| `Cut` | `{start,end}` axis-aligned grid points. Created by cut planners and UI candidates; store owns active cuts; partitioning consumes them. | Canonical/sort helpers create wrappers/arrays. Cuts are not sent to workers; derived piece footprints are. |
-| `FastenerSettings` | `{magnets,m3}` global design flags. | Store replaces via shallow merge; referenced in parameters, then cloned to workers/cache-key serialization. |
-| `PrinterSettings` | `{name,bedWidth,bedDepth}` from profiles/custom UI. | Store-owned plain object; used only for edit/cut planning, not worker input. |
-| `BinDesign` | `{id,cells,openings,walls,cuts}` logical editor bin. | Store owns until replacement; `buildBinParameters`, editors, and printer checks consume it. Never sent directly to workers or cache. |
-| `Design` | `{bins,heightUnits,perimeterThickness,filletRadius,fasteners,printer}`. | Zustand owns current snapshot; hook retains producing snapshots in pending/published state. Plain and clone-compatible but not itself posted. |
-| `BinParameters` | `{binId,height,perimeterThickness,filletRadius,fasteners,cells,openings,walls,pieces}`. `buildBinParameters` creates it; hook hashes/caches/posts it; worker/geometry consume it. | Fresh wrappers and spatial arrays per design derivation; request structured cloning copies it. |
-| `BinPiece` | `{triangles,cells}`. Geometry creates it; worker transfers triangle buffer; hook/cache own result; preview/export consume it. | Triangle buffer detaches in worker on transfer. IndexedDB clones it. Main-thread downstream branches share its array reference. |
-| `Bin` | `{binId,pieces}`. Geometry or `readCachedBin` creates it; hook orders/publishes it. | Wrapper survives until superseded geometry state and downstream references release it. |
-| `PrintableObject` | `{name,triangles}` from `toPrintableObjects`; consumed by export. | Wrapper/name new; triangles shared with `BinPiece`. |
-| `BedFitResult` | `{fits,width,depth,rotated}` from `checkBedFit`. | Short-lived derived result. |
-| `GenerateGeometryRequest` | `{revision,bins}` posted by hook. | Request wrapper is short-lived; structured cloning copies contents to worker. |
-| `GenerateGeometryResponse` | Discriminated `{ok:true,revision,bins}` or `{ok:false,revision,error}` created by worker. | Success triangle buffers transfer; failure is cloned plain data. |
-| `DisplayCell` | `Cell` plus `binId`, created by `flattenBins` for 2D editors. | Fresh render-time wrappers; never persisted. |
-| `CellPart` | `{id,cells}` from `partitionCells`. | Derived planning object; piece id is not sent to geometry. |
-| `UnitCut` | Private `{orientation,line,along}` representation in cut planning. | Short-lived within `availableCuts`/bisection calls. |
-| `DesignFitResult` | `{allFit,parts,worst}` from `checkDesignFit`. | Render-time summary for Cuts/Printer tabs. |
-| `PreviewPiece` | `{binId,pieceIndex,triangles,previewOffset}` from `previewLayout`. | Memoized by viewer; triangles shared, offset/wrapper new. |
-| `GeometryState` | `{bins,design,generating,error}` returned by `useBinGeometry`. | React state; immutable replacements pair output with its producing snapshot. |
-| `PendingGeneration` | `{revision,design,binIds,binsById,cacheKeysByBinId,remaining}` hook-private accumulator. | Stored in a ref, mutated as worker replies arrive, cleared on completion/failure/unmount. Maps are main-thread only. |
-| `CachedGeometryRecord` | `{key,pieces,byteSize,lastAccess}` IndexedDB record. | Database owns persisted clone. `refreshLastAccess` mutates a read clone before putting it back. |
-| `ConstantSolids` | `{base?,filletSpheres}` worker-local Manifold cache value. | Retained in `constantSolids` for the owning WASM runtime; cached solids intentionally not deleted. |
-| `Polygon` | Private `[number,number][]` alias in geometry. | Arrays returned/consumed by Manifold polygon APIs and mesh construction. |
+| Object/type | Fields; creator → owner → transformations/consumers | Lifetime, mutation, cloning | Why it exists / application goal |
+| --- | --- | --- | --- |
+| `Cell` | `{x, y}` grid coordinate. Created by defaults, editors, edge/cut helpers, mirroring, and cache clones; stored in bin footprints and piece groups; consumed throughout planning and geometry. | Usually copied into new arrays/objects. Structured-cloned to workers/IndexedDB. | Its role—`{x, y}` grid coordinate. Created by defaults, editors, edge/cut helpers, mirroring, and cache clones; stored in bin footprints and piece groups; consumed throughout planning and geometry—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `Point2` | `{x, y}` generic point; `GridPoint` is a type-only extension with no extra fields. | Wall/cut/preview/editor helpers allocate points; no methods. | Its role—`{x, y}` generic point; `GridPoint` is a type-only extension with no extra fields—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `EdgeOrientation`, `Edge`, `EdgeKind` | `'h'|'v'`; edge `{x,y,orientation}`; classification `'perimeter'|'internal'|'none'`. | Store owns opening edges; mirrored copies enter workers. | Its role—`'h'|'v'`; edge `{x,y,orientation}`; classification `'perimeter'|'internal'|'none'`—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `Wall` | `{start,end,width}` in editor millimetres. Created by `WallsTab`, stored by the selected bin, mirrored by `buildBinParameters`, consumed by geometry. | Draft is locally replaced during drag; stored walls are immutably replaced; worker requests clone them. | Its role—`{start,end,width}` in editor millimetres. Created by `WallsTab`, stored by the selected bin, mirrored by `buildBinParameters`, consumed by geometry—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `Cut` | `{start,end}` axis-aligned grid points. Created by cut planners and UI candidates; store owns active cuts; partitioning consumes them. | Canonical/sort helpers create wrappers/arrays. Cuts are not sent to workers; derived piece footprints are. | Its role—`{start,end}` axis-aligned grid points. Created by cut planners and UI candidates; store owns active cuts; partitioning consumes them—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `FastenerSettings` | `{magnets,m3}` global design flags. | Store replaces via shallow merge; referenced in parameters, then cloned to workers/cache-key serialization. | Its role—`{magnets,m3}` global design flags—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `PrinterSettings` | `{name,bedWidth,bedDepth}` from profiles/custom UI. | Store-owned plain object; used only for edit/cut planning, not worker input. | Its role—`{name,bedWidth,bedDepth}` from profiles/custom UI—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `BinDesign` | `{id,cells,openings,walls,cuts}` logical editor bin. | Store owns until replacement; `buildBinParameters`, editors, and printer checks consume it. Never sent directly to workers or cache. | Its role—`{id,cells,openings,walls,cuts}` logical editor bin—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `Design` | `{bins,heightUnits,perimeterThickness,filletRadius,fasteners,printer}`. | Zustand owns current snapshot; hook retains producing snapshots in pending/published state. Plain and clone-compatible but not itself posted. | Its role—`{bins,heightUnits,perimeterThickness,filletRadius,fasteners,printer}`—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `BinParameters` | `{binId,height,perimeterThickness,filletRadius,fasteners,cells,openings,walls,pieces}`. `buildBinParameters` creates it; hook hashes/caches/posts it; worker/geometry consume it. | Fresh wrappers and spatial arrays per design derivation; request structured cloning copies it. | Its role—`{binId,height,perimeterThickness,filletRadius,fasteners,cells,openings,walls,pieces}`. `buildBinParameters` creates it; hook hashes/caches/posts it; worker/geometry consume it—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `BinPiece` | `{triangles,cells}`. Geometry creates it; worker transfers triangle buffer; hook/cache own result; preview/export consume it. | Triangle buffer detaches in worker on transfer. IndexedDB clones it. Main-thread downstream branches share its array reference. | Its role—`{triangles,cells}`. Geometry creates it; worker transfers triangle buffer; hook/cache own result; preview/export consume it—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `Bin` | `{binId,pieces}`. Geometry or `readCachedBin` creates it; hook orders/publishes it. | Wrapper survives until superseded geometry state and downstream references release it. | Its role—`{binId,pieces}`. Geometry or `readCachedBin` creates it; hook orders/publishes it—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `PrintableObject` | `{name,triangles}` from `toPrintableObjects`; consumed by export. | Wrapper/name new; triangles shared with `BinPiece`. | Its role—`{name,triangles}` from `toPrintableObjects`; consumed by export—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `BedFitResult` | `{fits,width,depth,rotated}` from `checkBedFit`. | Short-lived derived result. | Its role—`{fits,width,depth,rotated}` from `checkBedFit`—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `GenerateGeometryRequest` | `{revision,bins}` posted by hook. | Request wrapper is short-lived; structured cloning copies contents to worker. | Its role—`{revision,bins}` posted by hook—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `GenerateGeometryResponse` | Discriminated `{ok:true,revision,bins}` or `{ok:false,revision,error}` created by worker. | Success triangle buffers transfer; failure is cloned plain data. | Its role—discriminated `{ok:true,revision,bins}` or `{ok:false,revision,error}` created by worker—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `DisplayCell` | `Cell` plus `binId`, created by `flattenBins` for 2D editors. | Fresh render-time wrappers; never persisted. | Its role—`Cell` plus `binId`, created by `flattenBins` for 2D editors—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `CellPart` | `{id,cells}` from `partitionCells`. | Derived planning object; piece id is not sent to geometry. | Its role—`{id,cells}` from `partitionCells`—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `UnitCut` | Private `{orientation,line,along}` representation in cut planning. | Short-lived within `availableCuts`/bisection calls. | Its role—private `{orientation,line,along}` representation in cut planning—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `DesignFitResult` | `{allFit,parts,worst}` from `checkDesignFit`. | Render-time summary for Cuts/Printer tabs. | Its role—`{allFit,parts,worst}` from `checkDesignFit`—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `PreviewPiece` | `{binId,pieceIndex,triangles,previewOffset}` from `previewLayout`. | Memoized by viewer; triangles shared, offset/wrapper new. | Its role—`{binId,pieceIndex,triangles,previewOffset}` from `previewLayout`—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `GeometryState` | `{bins,design,generating,error}` returned by `useBinGeometry`. | React state; immutable replacements pair output with its producing snapshot. | Its role—`{bins,design,generating,error}` returned by `useBinGeometry`—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `PendingGeneration` | `{revision,design,binIds,binsById,cacheKeysByBinId,remaining}` hook-private accumulator. | Stored in a ref, mutated as worker replies arrive, cleared on completion/failure/unmount. Maps are main-thread only. | Its role—`{revision,design,binIds,binsById,cacheKeysByBinId,remaining}` hook-private accumulator—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `CachedGeometryRecord` | `{key,pieces,byteSize,lastAccess}` IndexedDB record. | Database owns persisted clone. `refreshLastAccess` mutates a read clone before putting it back. | Its role—`{key,pieces,byteSize,lastAccess}` IndexedDB record—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `ConstantSolids` | `{base?,filletSpheres}` worker-local Manifold cache value. | Retained in `constantSolids` for the owning WASM runtime; cached solids intentionally not deleted. | Its role—`{base?,filletSpheres}` worker-local Manifold cache value—lets data retain its meaning across editors, cache, workers, preview, and export. |
+| `Polygon` | Private `[number,number][]` alias in geometry. | Arrays returned/consumed by Manifold polygon APIs and mesh construction. | Its role—private `[number,number][]` alias in geometry—lets data retain its meaning across editors, cache, workers, preview, and export. |
 
 Component prop interfaces (`Props`, `EditorCanvasProps`, `FieldProps`, `SliderFieldProps`, `StatusBannerProps`) describe React-owned props for their named components. React creates/passes ephemeral prop objects; components read them without mutation. `EditorCanvasProps` also includes native SVG props. `Tab` is the type-only key union of `TABS`.
 
@@ -112,52 +113,52 @@ Component prop interfaces (`Props`, `EditorCanvasProps`, `FieldProps`, `SliderFi
 
 ### Edges and cuts
 
-| Function | Calls / effects | Lifetime / performance |
-| --- | --- | --- |
-| `cellKey`, `edgeKey` | Produce canonical strings for maps/sets. | Allocate strings; called heavily by store/edit planning. |
-| `cellSet` | Maps cells through `cellKey` into `Set`. | New set. |
-| `adjacentCells` | Returns the two cells separated by an edge. | New tuple and cell objects. |
-| `classifyEdge` | Uses `adjacentCells`/`cellKey` and membership to return `EdgeKind`. | Read-only. |
-| `edgeInsideCell` | Returns the single occupied adjacent cell or `null`. | Exported but currently has no runtime caller in `src/`. |
-| `cellEdges` | Returns four canonical unit edges for a cell. | New array/objects. |
-| `edgesOfKind` | Private deduplicating scan using `cellSet`, `cellEdges`, `classifyEdge`, `sortEdges`. | Allocates set/array; drives perimeter/internal queries. |
-| `perimeterEdges`, `internalEdges` | Call `edgesOfKind` for one classification. | New sorted arrays; `internalEdges` currently has no runtime caller in `src/`. |
-| `sortEdges` | Copies and deterministic-sorts edges. | Does not mutate input. |
-| `toggleByKey` | Generic add/remove by caller-supplied key function. | Filters to a new array. |
-| `toggleEdge` | `toggleByKey` + `sortEdges`. | Exported but current store implements shared-bin opening behavior directly. |
-| `flattenBins` | Flattens bin cells into copied `{...cell,binId}` display cells. | New array and wrapper per cell. |
-| `canonicalCut`, `cutKey` | Normalize endpoint order and form stable key. | May return original cut or allocate wrapper; key allocates string. |
-| `sortCuts` | Canonicalizes/deduplicates with `Map`, copies values, deterministic sort. | New map/array. |
-| `toggleCut` | Adds/removes by `cutKey`, then `sortCuts`. | New arrays. |
-| `severedEdges` | Private expansion of cut spans to unit-edge keys. | New set. |
-| `partitionCells` | Breadth-first connected components after severing; calls `cellKey`/`severedEdges`; sorts parts and assigns ids. | Allocates maps, sets, queue/part arrays, cells array copies. `shift()` mutates only the local queue. |
-| `unitInternalCuts` | Private scan of right/down occupied neighbors. | New set and unit list. |
-| `mergeUnitCuts` | Private grouping/merging of contiguous units; nested `push` callback emits a `Cut`; calls `sortCuts`. | New maps/groups/cut objects. |
-| `availableCuts` | `unitInternalCuts` → `mergeUnitCuts`. | Produces maximal segments. |
-| `cutsAtLine` | Private filter of units at one grid line → `mergeUnitCuts`. | Recomputes units for each candidate line. |
-| `closestCellBisection` | Enumerates x/y lines, calls `cutsAtLine`, ranks imbalance/largest side with x-before-y ties. | Allocates candidate/value arrays; no state effects. |
-| `addCutsUntilFit` | Repeatedly partitions, selects first failing part using supplied `fits`, adds its closest bisection, and guards loop length. | Deterministic iterative allocation; preserves existing cuts. |
+| Function | Calls / effects | Lifetime / performance | Why it exists / application goal |
+| --- | --- | --- | --- |
+| `cellKey`, `edgeKey` | Produce canonical strings for maps/sets. | Allocate strings; called heavily by store/edit planning. | Its role—produce canonical strings for maps/sets—turns grid edits and printer constraints into well-defined printable pieces. |
+| `cellSet` | Maps cells through `cellKey` into `Set`. | New set. | Its role—maps cells through `cellKey` into `Set`—turns grid edits and printer constraints into well-defined printable pieces. |
+| `adjacentCells` | Returns the two cells separated by an edge. | New tuple and cell objects. | Its role—returns the two cells separated by an edge—turns grid edits and printer constraints into well-defined printable pieces. |
+| `classifyEdge` | Uses `adjacentCells`/`cellKey` and membership to return `EdgeKind`. | Read-only. | Its role—uses `adjacentCells`/`cellKey` and membership to return `EdgeKind`—turns grid edits and printer constraints into well-defined printable pieces. |
+| `edgeInsideCell` | Returns the single occupied adjacent cell or `null`. | Exported but currently has no runtime caller in `src/`. | Its role—returns the single occupied adjacent cell or `null`—turns grid edits and printer constraints into well-defined printable pieces. |
+| `cellEdges` | Returns four canonical unit edges for a cell. | New array/objects. | Its role—returns four canonical unit edges for a cell—turns grid edits and printer constraints into well-defined printable pieces. |
+| `edgesOfKind` | Private deduplicating scan using `cellSet`, `cellEdges`, `classifyEdge`, `sortEdges`. | Allocates set/array; drives perimeter/internal queries. | Its role—private deduplicating scan using `cellSet`, `cellEdges`, `classifyEdge`, `sortEdges`—turns grid edits and printer constraints into well-defined printable pieces. |
+| `perimeterEdges`, `internalEdges` | Call `edgesOfKind` for one classification. | New sorted arrays; `internalEdges` currently has no runtime caller in `src/`. | Its role—call `edgesOfKind` for one classification—turns grid edits and printer constraints into well-defined printable pieces. |
+| `sortEdges` | Copies and deterministic-sorts edges. | Does not mutate input. | Its role—copies and deterministic-sorts edges—turns grid edits and printer constraints into well-defined printable pieces. |
+| `toggleByKey` | Generic add/remove by caller-supplied key function. | Filters to a new array. | Its role—generic add/remove by caller-supplied key function—turns grid edits and printer constraints into well-defined printable pieces. |
+| `toggleEdge` | `toggleByKey` + `sortEdges`. | Exported but current store implements shared-bin opening behavior directly. | Its role—`toggleByKey` + `sortEdges`—turns grid edits and printer constraints into well-defined printable pieces. |
+| `flattenBins` | Flattens bin cells into copied `{...cell,binId}` display cells. | New array and wrapper per cell. | Its role—flattens bin cells into copied `{...cell,binId}` display cells—turns grid edits and printer constraints into well-defined printable pieces. |
+| `canonicalCut`, `cutKey` | Normalize endpoint order and form stable key. | May return original cut or allocate wrapper; key allocates string. | Its role—normalize endpoint order and form stable key—turns grid edits and printer constraints into well-defined printable pieces. |
+| `sortCuts` | Canonicalizes/deduplicates with `Map`, copies values, deterministic sort. | New map/array. | Its role—canonicalizes/deduplicates with `Map`, copies values, deterministic sort—turns grid edits and printer constraints into well-defined printable pieces. |
+| `toggleCut` | Adds/removes by `cutKey`, then `sortCuts`. | New arrays. | Its role—adds/removes by `cutKey`, then `sortCuts`—turns grid edits and printer constraints into well-defined printable pieces. |
+| `severedEdges` | Private expansion of cut spans to unit-edge keys. | New set. | Its role—private expansion of cut spans to unit-edge keys—turns grid edits and printer constraints into well-defined printable pieces. |
+| `partitionCells` | Breadth-first connected components after severing; calls `cellKey`/`severedEdges`; sorts parts and assigns ids. | Allocates maps, sets, queue/part arrays, cells array copies. `shift()` mutates only the local queue. | Its role—breadth-first connected components after severing; calls `cellKey`/`severedEdges`; sorts parts and assigns ids—turns grid edits and printer constraints into well-defined printable pieces. |
+| `unitInternalCuts` | Private scan of right/down occupied neighbors. | New set and unit list. | Its role—private scan of right/down occupied neighbors—turns grid edits and printer constraints into well-defined printable pieces. |
+| `mergeUnitCuts` | Private grouping/merging of contiguous units; nested `push` callback emits a `Cut`; calls `sortCuts`. | New maps/groups/cut objects. | Its role—private grouping/merging of contiguous units; nested `push` callback emits a `Cut`; calls `sortCuts`—turns grid edits and printer constraints into well-defined printable pieces. |
+| `availableCuts` | `unitInternalCuts` → `mergeUnitCuts`. | Produces maximal segments. | Its role—`unitInternalCuts` → `mergeUnitCuts`—turns grid edits and printer constraints into well-defined printable pieces. |
+| `cutsAtLine` | Private filter of units at one grid line → `mergeUnitCuts`. | Recomputes units for each candidate line. | Its role—private filter of units at one grid line → `mergeUnitCuts`—turns grid edits and printer constraints into well-defined printable pieces. |
+| `closestCellBisection` | Enumerates x/y lines, calls `cutsAtLine`, ranks imbalance/largest side with x-before-y ties. | Allocates candidate/value arrays; no state effects. | Its role—enumerates x/y lines, calls `cutsAtLine`, ranks imbalance/largest side with x-before-y ties—turns grid edits and printer constraints into well-defined printable pieces. |
+| `addCutsUntilFit` | Repeatedly partitions, selects first failing part using supplied `fits`, adds its closest bisection, and guards loop length. | Deterministic iterative allocation; preserves existing cuts. | Its role—repeatedly partitions, selects first failing part using supplied `fits`, adds its closest bisection, and guards loop length—turns grid edits and printer constraints into well-defined printable pieces. |
 
 ### Coordinates, printers, preview, and export shaping
 
-| Function | Calls / effects | Lifetime / performance |
-| --- | --- | --- |
-| `maximumOccupiedRow` | Scans every design cell; returns at least zero. | Temporary flattened arrays from `flatMap`/`map`. |
-| `mirrorCell`, `mirrorEdge`, `mirrorGridPoint`, `mirrorMillimetrePoint` | Create generation-frame coordinate copies. | Pure allocation. |
-| `mirrorCut` | Calls `mirrorGridPoint` for endpoints. | Used only by preview layout; cuts do not cross worker boundary. |
-| `mirrorWall` | Calls `mirrorMillimetrePoint` for endpoints. | Preserves width through object spread. |
-| `buildBinParameters` | `gridfinityHeight`, `maximumOccupiedRow`, `partitionCells`, mirror helpers; creates trusted per-bin worker input. | Memoized by hook per `design` reference; allocates all spatial transforms/piece arrays. |
-| `footprintCells` | Computes cell bounding-box width/depth in cells. | Allocates x/y arrays; empty input returns zeroes. |
-| `checkBedFit` | `footprintCells`; converts to mm, includes allowance, tests normal/rotated fit. | New result; no mutation. |
-| `cutsForPrinter` | `addCutsUntilFit` with a `checkBedFit` closure. | Cut-planning allocations; no printer data reaches geometry. |
-| `checkDesignFit` | Partitions every bin, checks each piece, tracks worst result by failure then area. | Short-lived summary and partitions. |
-| `previewOffsetFor` | Builds unique cut-line sets and displaces pieces wholly to either side by half-gap per line. | New sets/result point. |
-| `previewLayout` | Finds paired design cuts, mirrors them, calls `previewOffsetFor`, flattens bins. | New wrappers/offsets; shares triangle arrays. |
-| `partFilename` | Derives single/multi-bin and piece-index STL name. | New string. |
-| `toPrintableObjects` | Flattens bins/pieces and calls `partFilename`. | New wrappers/strings; shares triangle arrays. |
-| `downloadBuffer` | Creates `Blob`, object URL, anchor; sets `href`/`download`; clicks; revokes URL. | Browser side effect. Buffer is wrapped, not rewritten. Anchor is not inserted into DOM. |
-| `trianglesToStl` | Allocates `ArrayBuffer`/`DataView`, computes triangle normals, writes binary STL little-endian. | One serialized allocation per call; reads but does not modify triangles. |
-| `downloadStl` | `trianglesToStl` → `downloadBuffer` with `model/stl`. | Default filename when omitted. |
+| Function | Calls / effects | Lifetime / performance | Why it exists / application goal |
+| --- | --- | --- | --- |
+| `maximumOccupiedRow` | Scans every design cell; returns at least zero. | Temporary flattened arrays from `flatMap`/`map`. | Its role—scans every design cell; returns at least zero—preserves design meaning while moving it toward an accurate preview or STL. |
+| `mirrorCell`, `mirrorEdge`, `mirrorGridPoint`, `mirrorMillimetrePoint` | Create generation-frame coordinate copies. | Pure allocation. | Its role—create generation-frame coordinate copies—preserves design meaning while moving it toward an accurate preview or STL. |
+| `mirrorCut` | Calls `mirrorGridPoint` for endpoints. | Used only by preview layout; cuts do not cross worker boundary. | Its role—calls `mirrorGridPoint` for endpoints—preserves design meaning while moving it toward an accurate preview or STL. |
+| `mirrorWall` | Calls `mirrorMillimetrePoint` for endpoints. | Preserves width through object spread. | Its role—calls `mirrorMillimetrePoint` for endpoints—preserves design meaning while moving it toward an accurate preview or STL. |
+| `buildBinParameters` | `gridfinityHeight`, `maximumOccupiedRow`, `partitionCells`, mirror helpers; creates trusted per-bin worker input. | Memoized by hook per `design` reference; allocates all spatial transforms/piece arrays. | Its role—`gridfinityHeight`, `maximumOccupiedRow`, `partitionCells`, mirror helpers; creates trusted per-bin worker input—preserves design meaning while moving it toward an accurate preview or STL. |
+| `footprintCells` | Computes cell bounding-box width/depth in cells. | Allocates x/y arrays; empty input returns zeroes. | Its role—computes cell bounding-box width/depth in cells—preserves design meaning while moving it toward an accurate preview or STL. |
+| `checkBedFit` | `footprintCells`; converts to mm, includes allowance, tests normal/rotated fit. | New result; no mutation. | Its role—`footprintCells`; converts to mm, includes allowance, tests normal/rotated fit—preserves design meaning while moving it toward an accurate preview or STL. |
+| `cutsForPrinter` | `addCutsUntilFit` with a `checkBedFit` closure. | Cut-planning allocations; no printer data reaches geometry. | Its role—`addCutsUntilFit` with a `checkBedFit` closure—preserves design meaning while moving it toward an accurate preview or STL. |
+| `checkDesignFit` | Partitions every bin, checks each piece, tracks worst result by failure then area. | Short-lived summary and partitions. | Its role—partitions every bin, checks each piece, tracks worst result by failure then area—preserves design meaning while moving it toward an accurate preview or STL. |
+| `previewOffsetFor` | Builds unique cut-line sets and displaces pieces wholly to either side by half-gap per line. | New sets/result point. | Its role—builds unique cut-line sets and displaces pieces wholly to either side by half-gap per line—preserves design meaning while moving it toward an accurate preview or STL. |
+| `previewLayout` | Finds paired design cuts, mirrors them, calls `previewOffsetFor`, flattens bins. | New wrappers/offsets; shares triangle arrays. | Its role—finds paired design cuts, mirrors them, calls `previewOffsetFor`, flattens bins—preserves design meaning while moving it toward an accurate preview or STL. |
+| `partFilename` | Derives single/multi-bin and piece-index STL name. | New string. | Its role—derives single/multi-bin and piece-index STL name—preserves design meaning while moving it toward an accurate preview or STL. |
+| `toPrintableObjects` | Flattens bins/pieces and calls `partFilename`. | New wrappers/strings; shares triangle arrays. | Its role—flattens bins/pieces and calls `partFilename`—preserves design meaning while moving it toward an accurate preview or STL. |
+| `downloadBuffer` | Creates `Blob`, object URL, anchor; sets `href`/`download`; clicks; revokes URL. | Browser side effect. Buffer is wrapped, not rewritten. Anchor is not inserted into DOM. | Its role—creates `Blob`, object URL, anchor; sets `href`/`download`; clicks; revokes URL—preserves design meaning while moving it toward an accurate preview or STL. |
+| `trianglesToStl` | Allocates `ArrayBuffer`/`DataView`, computes triangle normals, writes binary STL little-endian. | One serialized allocation per call; reads but does not modify triangles. | Its role—allocates `ArrayBuffer`/`DataView`, computes triangle normals, writes binary STL little-endian—preserves design meaning while moving it toward an accurate preview or STL. |
+| `downloadStl` | `trianglesToStl` → `downloadBuffer` with `model/stl`. | Default filename when omitted. | Its role—`trianglesToStl` → `downloadBuffer` with `model/stl`—preserves design meaning while moving it toward an accurate preview or STL. |
 
 ### Gridfinity specification
 
@@ -171,38 +172,38 @@ All entries in this section run in a geometry worker in production. Validation s
 
 ### Manifold initialization and extraction
 
-| Symbol | Calls / effects | Lifetime / performance |
-| --- | --- | --- |
-| module `cached` | Private `Promise<ManifoldToplevel> | null`. | One initialization promise per module runtime/worker. Rejected promises remain cached. |
-| `initManifold` | Calls external `Module` with optional `locateFile`, awaits WASM, calls `wasm.setup`, returns runtime. | Reuses `cached`; worker passes bundled WASM URL resolver. |
-| `manifoldTriangles` | Calls `manifold.getMesh`; welds float32-quantized vertices with `Map`, creates `Uint32Array` remap, drops index-collapsed faces, calls `repairDegenerateTris`, expands into `Float32Array`. | Sole production extraction boundary; deliberately duplicates vertices in final soup. Does not delete its input. |
-| `repairDegenerateTris` | Private repair loop. Local `area` and `len2` callbacks measure facets/edges; an oriented-edge map finds the neighbor to split; dead facets are filtered; stops when unchanged or after 256 iterations. | Mutates its local triangle array and appends replacements; allocates maps/sets/arrays each iteration. |
+| Symbol | Calls / effects | Lifetime / performance | Why it exists / application goal |
+| --- | --- | --- | --- |
+| module `cached` | Private `Promise<ManifoldToplevel> | null`. | One initialization promise per module runtime/worker. Rejected promises remain cached. | Its role—private `Promise<ManifoldToplevel>—establishes the printable triangle boundary shared by preview and export. |
+| `initManifold` | Calls external `Module` with optional `locateFile`, awaits WASM, calls `wasm.setup`, returns runtime. | Reuses `cached`; worker passes bundled WASM URL resolver. | Its role—calls external `Module` with optional `locateFile`, awaits WASM, calls `wasm.setup`, returns runtime—establishes the printable triangle boundary shared by preview and export. |
+| `manifoldTriangles` | Calls `manifold.getMesh`; welds float32-quantized vertices with `Map`, creates `Uint32Array` remap, drops index-collapsed faces, calls `repairDegenerateTris`, expands into `Float32Array`. | Sole production extraction boundary; deliberately duplicates vertices in final soup. Does not delete its input. | Its role—calls `manifold.getMesh`; welds float32-quantized vertices with `Map`, creates `Uint32Array` remap, drops index-collapsed faces, calls `repairDegenerateTris`, expands into `Float32Array`—establishes the printable triangle boundary shared by preview and export. |
+| `repairDegenerateTris` | Private repair loop. Local `area` and `len2` callbacks measure facets/edges; an oriented-edge map finds the neighbor to split; dead facets are filtered; stops when unchanged or after 256 iterations. | Mutates its local triangle array and appends replacements; allocates maps/sets/arrays each iteration. | Its role—private repair loop. Local `area` and `len2` callbacks measure facets/edges; an oriented-edge map finds the neighbor to split; dead facets are filtered; stops when unchanged or after 256 iterations—establishes the printable triangle boundary shared by preview and export. |
 
 ### Gridfinity construction helpers
 
-| Symbol | Direct relationships and responsibility | Lifetime / performance |
-| --- | --- | --- |
-| `roundedRect` | `CrossSection.square(...).offset(...)`. | Returns native 2D object. |
-| `profilePoints` | `CrossSection.toPolygons`, flattens at supplied Z. | New JS point arrays for hull input. |
-| `loft` | Combines two `profilePoints` sets with `Manifold.hull`. | Returns native solid. |
-| `constantSolids`, `constantsFor` | `WeakMap<ManifoldToplevel, ConstantSolids>` lookup/creator. | Keys do not keep a WASM wrapper alive by themselves; values retain cached native solids while key lives. |
-| `filletSphere` | Radius-keyed `Manifold.sphere` cache. | Cached spheres intentionally retained and never deleted by callers. |
-| `canonicalBase` | Builds rounded bottom/middle/top profiles, lofts/extrudes/translates, unions; calls `numVert` to force evaluation. | One cached solid per WASM runtime. Returned base/translated derivatives must not be deleted under current ownership rule. |
-| `cellFootprint` | Unions translated pitch-sized `CrossSection.square` objects. | New native 2D result and input intermediates. |
-| `closeReentrantCorners` | Decomposes regions, examines polygon signed area/turns, performs round offsets, circle envelopes, intersection/add/union. | Returns new 2D result; creates native and JS intermediates. |
-| `outerFootprint` | Square inset/round offset then `closeReentrantCorners`. | Derives body contour from shared footprint. |
-| `openingChannel` | Creates/translates one square based on edge orientation. | New native 2D object. |
-| `wallFootprint` | Computes wall quad and invokes `new wasm.CrossSection`. | New native 2D object; expects nonzero wall length. |
-| `cavityFootprint` | Insets shared footprint, unions opening channels, subtracts unioned wall footprints. | Rebinds local cavity to new native results. |
-| `nearestOnContours` | Scans every contour segment for nearest projected point. | Pure JS loop; returns a new point tuple. |
-| `sweptRegionMesh` | Builds fillet rings/walls/caps as numeric arrays; local `addVertex` and `emit` callbacks append; uses `nearestOnContours`, `offset`, `simplify`, `toPolygons`, `wasm.triangulate`, `new wasm.Mesh`, `new wasm.Manifold`, and `numVert`; returns `null` on projection discontinuity/empty solid. | Heavy temporary JS/native allocation. Explicitly deletes raw wall/wall and rejected solid; returned solid passes ownership to caller. |
-| `sphericalSweep` | Extrudes/translates seed then `minkowskiSum(sphere)`; deletes two intermediates. | Fallback region solid; cached sphere is retained. |
-| `roundedCavity` | Handles zero radius, closes/insets/simplifies/decomposes; maps regions through `sweptRegionMesh` or `sphericalSweep`; unions multiple cavities; deletes documented intermediates. | Returns one native cavity solid. |
-| `canonicalHardwareCutter` | Builds four translated cylinders and unions them. | New native solid for one feature. |
-| `hardwareCutters` | Builds enabled canonical cutters and translates each to every cell. | Returns native solid array; empty when features disabled. |
-| `buildBinSolid` | Creates footprint, translated bases, body union, subtracts rounded cavity and optional unioned hardware cutters. | One complete solid per logical bin; local `solid` is rebound across booleans. |
-| `partCutter` | Extrudes/offsets a piece cell footprint beyond vertical solid bounds. | New native cutter avoids coincident faces. |
-| `generateGeometry` | Gets `canonicalBase`; maps bins; calls `buildBinSolid`; single-piece uses complete solid, multipart intersects `partCutter`; simplifies; calls `manifoldTriangles`; echoes cells. | Synchronous worker work. Produces plain wrappers and transferable typed arrays. |
+| Symbol | Direct relationships and responsibility | Lifetime / performance | Why it exists / application goal |
+| --- | --- | --- | --- |
+| `roundedRect` | `CrossSection.square(...).offset(...)`. | Returns native 2D object. | Its role—`CrossSection.square(...).offset(...)`—constructs the valid physical solid that the application ultimately exports. |
+| `profilePoints` | `CrossSection.toPolygons`, flattens at supplied Z. | New JS point arrays for hull input. | Its role—`CrossSection.toPolygons`, flattens at supplied Z—constructs the valid physical solid that the application ultimately exports. |
+| `loft` | Combines two `profilePoints` sets with `Manifold.hull`. | Returns native solid. | Its role—combines two `profilePoints` sets with `Manifold.hull`—constructs the valid physical solid that the application ultimately exports. |
+| `constantSolids`, `constantsFor` | `WeakMap<ManifoldToplevel, ConstantSolids>` lookup/creator. | Keys do not keep a WASM wrapper alive by themselves; values retain cached native solids while key lives. | Its role—`WeakMap<ManifoldToplevel, ConstantSolids>` lookup/creator—constructs the valid physical solid that the application ultimately exports. |
+| `filletSphere` | Radius-keyed `Manifold.sphere` cache. | Cached spheres intentionally retained and never deleted by callers. | Its role—radius-keyed `Manifold.sphere` cache—constructs the valid physical solid that the application ultimately exports. |
+| `canonicalBase` | Builds rounded bottom/middle/top profiles, lofts/extrudes/translates, unions; calls `numVert` to force evaluation. | One cached solid per WASM runtime. Returned base/translated derivatives must not be deleted under current ownership rule. | Its role—builds rounded bottom/middle/top profiles, lofts/extrudes/translates, unions; calls `numVert` to force evaluation—constructs the valid physical solid that the application ultimately exports. |
+| `cellFootprint` | Unions translated pitch-sized `CrossSection.square` objects. | New native 2D result and input intermediates. | Its role—unions translated pitch-sized `CrossSection.square` objects—constructs the valid physical solid that the application ultimately exports. |
+| `closeReentrantCorners` | Decomposes regions, examines polygon signed area/turns, performs round offsets, circle envelopes, intersection/add/union. | Returns new 2D result; creates native and JS intermediates. | Its role—decomposes regions, examines polygon signed area/turns, performs round offsets, circle envelopes, intersection/add/union—constructs the valid physical solid that the application ultimately exports. |
+| `outerFootprint` | Square inset/round offset then `closeReentrantCorners`. | Derives body contour from shared footprint. | Its role—square inset/round offset then `closeReentrantCorners`—constructs the valid physical solid that the application ultimately exports. |
+| `openingChannel` | Creates/translates one square based on edge orientation. | New native 2D object. | Its role—creates/translates one square based on edge orientation—constructs the valid physical solid that the application ultimately exports. |
+| `wallFootprint` | Computes wall quad and invokes `new wasm.CrossSection`. | New native 2D object; expects nonzero wall length. | Its role—computes wall quad and invokes `new wasm.CrossSection`—constructs the valid physical solid that the application ultimately exports. |
+| `cavityFootprint` | Insets shared footprint, unions opening channels, subtracts unioned wall footprints. | Rebinds local cavity to new native results. | Its role—insets shared footprint, unions opening channels, subtracts unioned wall footprints—constructs the valid physical solid that the application ultimately exports. |
+| `nearestOnContours` | Scans every contour segment for nearest projected point. | Pure JS loop; returns a new point tuple. | Its role—scans every contour segment for nearest projected point—constructs the valid physical solid that the application ultimately exports. |
+| `sweptRegionMesh` | Builds fillet rings/walls/caps as numeric arrays; local `addVertex` and `emit` callbacks append; uses `nearestOnContours`, `offset`, `simplify`, `toPolygons`, `wasm.triangulate`, `new wasm.Mesh`, `new wasm.Manifold`, and `numVert`; returns `null` on projection discontinuity/empty solid. | Heavy temporary JS/native allocation. Explicitly deletes raw wall/wall and rejected solid; returned solid passes ownership to caller. | Its role—builds fillet rings/walls/caps as numeric arrays; local `addVertex` and `emit` callbacks append; uses `nearestOnContours`, `offset`, `simplify`, `toPolygons`, `wasm.triangulate`, `new wasm.Mesh`, `new wasm.Manifold`, and `numVert`; returns `null` on projection discontinuity/empty solid—constructs the valid physical solid that the application ultimately exports. |
+| `sphericalSweep` | Extrudes/translates seed then `minkowskiSum(sphere)`; deletes two intermediates. | Fallback region solid; cached sphere is retained. | Its role—extrudes/translates seed then `minkowskiSum(sphere)`; deletes two intermediates—constructs the valid physical solid that the application ultimately exports. |
+| `roundedCavity` | Handles zero radius, closes/insets/simplifies/decomposes; maps regions through `sweptRegionMesh` or `sphericalSweep`; unions multiple cavities; deletes documented intermediates. | Returns one native cavity solid. | Its role—handles zero radius, closes/insets/simplifies/decomposes; maps regions through `sweptRegionMesh` or `sphericalSweep`; unions multiple cavities; deletes documented intermediates—constructs the valid physical solid that the application ultimately exports. |
+| `canonicalHardwareCutter` | Builds four translated cylinders and unions them. | New native solid for one feature. | Its role—builds four translated cylinders and unions them—constructs the valid physical solid that the application ultimately exports. |
+| `hardwareCutters` | Builds enabled canonical cutters and translates each to every cell. | Returns native solid array; empty when features disabled. | Its role—builds enabled canonical cutters and translates each to every cell—constructs the valid physical solid that the application ultimately exports. |
+| `buildBinSolid` | Creates footprint, translated bases, body union, subtracts rounded cavity and optional unioned hardware cutters. | One complete solid per logical bin; local `solid` is rebound across booleans. | Its role—creates footprint, translated bases, body union, subtracts rounded cavity and optional unioned hardware cutters—constructs the valid physical solid that the application ultimately exports. |
+| `partCutter` | Extrudes/offsets a piece cell footprint beyond vertical solid bounds. | New native cutter avoids coincident faces. | Its role—extrudes/offsets a piece cell footprint beyond vertical solid bounds—constructs the valid physical solid that the application ultimately exports. |
+| `generateGeometry` | Gets `canonicalBase`; maps bins; calls `buildBinSolid`; single-piece uses complete solid, multipart intersects `partCutter`; simplifies; calls `manifoldTriangles`; echoes cells. | Synchronous worker work. Produces plain wrappers and transferable typed arrays. | Its role—gets `canonicalBase`; maps bins; calls `buildBinSolid`; single-piece uses complete solid, multipart intersects `partCutter`; simplifies; calls `manifoldTriangles`; echoes cells—constructs the valid physical solid that the application ultimately exports. |
 
 Production code also reads module constants `PITCH`, `BASE`, `FILLET_SEGMENTS`, `SLIVER_EPSILON`, `FILLET_RINGS`, `HARDWARE_OFFSET`, and `HARDWARE_OFFSETS`. They are immutable module values used to avoid repeated specification lookup and to define discretization/allowances. No timing guarantee is associated with them.
 
@@ -210,48 +211,48 @@ Production code also reads module constants `PITCH`, `BASE`, `FILLET_SEGMENTS`, 
 
 These named module values complete the runtime declaration inventory. They are created once per evaluating JavaScript realm and are not mutated.
 
-| Constants | Use |
-| --- | --- |
-| `DOWNLOAD_SPACING_MS` | Delay multiplier between “download all” callbacks. |
-| `GRID_PITCH`, `CELL`, `PAD` | Editor conversion inputs: spec millimetres per cell, SVG units per cell, and SVG padding. |
-| `GRID_SIZE_INPUT_WIDTH` | Shape grid `NumberInput` width. |
-| `POINT_SNAP_MM`, `MIN_WALL_LENGTH`, `WALL_WIDTH_INPUT` | Wall endpoint snap radius, accepted draft length, and width-input presentation width. |
-| `DEFAULT_ALPHA`, `DEFAULT_BETA`, `DEFAULT_RADIUS`, `FIT_MARGIN` | Babylon initial/reset orbit and camera-fit margin. |
-| `ANIMATION_FPS`, `ANIMATION_FRAMES`, `FACE_ORIENTATION` | Camera animation inputs and diagnostic winding label. |
-| `BUSY_DEBOUNCE_MS`, `MAX_POOL_SIZE` | In-flight edit coalescing window and worker cap. |
-| `OUT_WELD` | Manifold extraction's millimetre-to-micron quantization multiplier. |
-| `DATABASE_NAME`, `DATABASE_VERSION`, `STORE_NAME`, `LAST_ACCESS_INDEX`, `CACHE_KEY_VERSION`, `MAX_CACHE_BYTES` | IndexedDB schema, cache-key invalidation salt, and approximate eviction ceiling. |
+| Constants | Use | Why it exists / application goal |
+| --- | --- | --- |
+| `DOWNLOAD_SPACING_MS` | Delay multiplier between “download all” callbacks. | Its role—delay multiplier between “download all” callbacks—keeps the relevant behavior consistent and centrally defined. |
+| `GRID_PITCH`, `CELL`, `PAD` | Editor conversion inputs: spec millimetres per cell, SVG units per cell, and SVG padding. | Its role—editor conversion inputs: spec millimetres per cell, SVG units per cell, and SVG padding—keeps the relevant behavior consistent and centrally defined. |
+| `GRID_SIZE_INPUT_WIDTH` | Shape grid `NumberInput` width. | Its role—shape grid `NumberInput` width—keeps the relevant behavior consistent and centrally defined. |
+| `POINT_SNAP_MM`, `MIN_WALL_LENGTH`, `WALL_WIDTH_INPUT` | Wall endpoint snap radius, accepted draft length, and width-input presentation width. | Its role—wall endpoint snap radius, accepted draft length, and width-input presentation width—keeps the relevant behavior consistent and centrally defined. |
+| `DEFAULT_ALPHA`, `DEFAULT_BETA`, `DEFAULT_RADIUS`, `FIT_MARGIN` | Babylon initial/reset orbit and camera-fit margin. | Its role—babylon initial/reset orbit and camera-fit margin—keeps the relevant behavior consistent and centrally defined. |
+| `ANIMATION_FPS`, `ANIMATION_FRAMES`, `FACE_ORIENTATION` | Camera animation inputs and diagnostic winding label. | Its role—camera animation inputs and diagnostic winding label—keeps the relevant behavior consistent and centrally defined. |
+| `BUSY_DEBOUNCE_MS`, `MAX_POOL_SIZE` | In-flight edit coalescing window and worker cap. | Its role—in-flight edit coalescing window and worker cap—keeps the relevant behavior consistent and centrally defined. |
+| `OUT_WELD` | Manifold extraction's millimetre-to-micron quantization multiplier. | Its role—manifold extraction's millimetre-to-micron quantization multiplier—keeps the relevant behavior consistent and centrally defined. |
+| `DATABASE_NAME`, `DATABASE_VERSION`, `STORE_NAME`, `LAST_ACCESS_INDEX`, `CACHE_KEY_VERSION`, `MAX_CACHE_BYTES` | IndexedDB schema, cache-key invalidation salt, and approximate eviction ceiling. | Its role—indexedDB schema, cache-key invalidation salt, and approximate eviction ceiling—keeps the relevant behavior consistent and centrally defined. |
 
 ## Geometry cache and worker orchestration
 
 ### `geometryCache.ts`
 
-| Function/object | Calls / effects | Lifetime / performance |
-| --- | --- | --- |
-| cache constants | Database/store/index/version names and `MAX_CACHE_BYTES`. | Module lifetime; cache-key salt explicitly invalidates older geometry encodings. |
-| `databasePromise` | Cached database-open promise. | Reset to `null` only after open rejection so later calls retry. |
-| `requestResult` | Wraps `IDBRequest` success/error callbacks in `Promise`. | Event handlers close over request until settlement. |
-| `transactionComplete` | Wraps transaction complete/error/abort events. | Required before treating writes/scans as committed/finished. |
-| `openDatabase` | Calls `indexedDB.open`; upgrade creates object store/key path and last-access index; success resolves or closes after prior failure; blocked/error rejects. | One live database instance per successful module lifetime; no explicit page-lifetime close. |
-| `isCell`, `isPiece`, `isRecord` | Runtime cache corruption/type guards. | Read-only scans; `isPiece` requires nonempty triangle soup divisible by 9. |
-| `approximateSize` | Sums triangle byte lengths plus estimated cell/wrapper overhead. | Approximation drives policy, not exact storage accounting. |
-| `removeRecord` | Opens readwrite transaction, deletes key, awaits completion. | Best-effort caller may ignore failure. |
-| `refreshLastAccess` | Mutates read record's timestamp, puts it in a new transaction, awaits completion. | Background best effort; rewrites structured clone. |
-| `cachedBytes` | Cursor-scans store and sums valid positive `byteSize`; promise resolves at cursor end. | Does not materialize records into a new collection. |
-| `evictOldest` | Cursor-scans last-access index, deletes until total is within ceiling. | Mutates IndexedDB inside caller transaction. |
-| `evictLeastRecentlyUsed` | Readonly size transaction then conditional readwrite eviction transaction. | Runs after every successful write. Concurrent writers are serialized by IndexedDB transactions. |
-| `geometryCacheKey` | Builds explicit geometry-only object; `JSON.stringify`; `new TextEncoder().encode`; `crypto.subtle.digest`; `new Uint8Array`; hex join. | Several temporary allocations per bin; excludes `binId`. |
-| `readCachedBin` | Reads by key with `requestResult`; validates; schedules invalid removal or access refresh; returns `{binId,pieces}` or `null`; catches all errors. | Cache clone supplies typed arrays; hit wrapper reapplies current identity. |
-| `writeCachedBin` | Creates timestamped record, puts/awaits, then evicts. | Errors reject to hook, which intentionally ignores them. |
+| Function/object | Calls / effects | Lifetime / performance | Why it exists / application goal |
+| --- | --- | --- | --- |
+| cache constants | Database/store/index/version names and `MAX_CACHE_BYTES`. | Module lifetime; cache-key salt explicitly invalidates older geometry encodings. | Its role—database/store/index/version names and `MAX_CACHE_BYTES`—makes repeated geometry generation practical without changing output correctness. |
+| `databasePromise` | Cached database-open promise. | Reset to `null` only after open rejection so later calls retry. | Its role—cached database-open promise—makes repeated geometry generation practical without changing output correctness. |
+| `requestResult` | Wraps `IDBRequest` success/error callbacks in `Promise`. | Event handlers close over request until settlement. | Its role—wraps `IDBRequest` success/error callbacks in `Promise`—makes repeated geometry generation practical without changing output correctness. |
+| `transactionComplete` | Wraps transaction complete/error/abort events. | Required before treating writes/scans as committed/finished. | Its role—wraps transaction complete/error/abort events—makes repeated geometry generation practical without changing output correctness. |
+| `openDatabase` | Calls `indexedDB.open`; upgrade creates object store/key path and last-access index; success resolves or closes after prior failure; blocked/error rejects. | One live database instance per successful module lifetime; no explicit page-lifetime close. | Its role—calls `indexedDB.open`; upgrade creates object store/key path and last-access index; success resolves or closes after prior failure; blocked/error rejects—makes repeated geometry generation practical without changing output correctness. |
+| `isCell`, `isPiece`, `isRecord` | Runtime cache corruption/type guards. | Read-only scans; `isPiece` requires nonempty triangle soup divisible by 9. | Its role—runtime cache corruption/type guards—makes repeated geometry generation practical without changing output correctness. |
+| `approximateSize` | Sums triangle byte lengths plus estimated cell/wrapper overhead. | Approximation drives policy, not exact storage accounting. | Its role—sums triangle byte lengths plus estimated cell/wrapper overhead—makes repeated geometry generation practical without changing output correctness. |
+| `removeRecord` | Opens readwrite transaction, deletes key, awaits completion. | Best-effort caller may ignore failure. | Its role—opens readwrite transaction, deletes key, awaits completion—makes repeated geometry generation practical without changing output correctness. |
+| `refreshLastAccess` | Mutates read record's timestamp, puts it in a new transaction, awaits completion. | Background best effort; rewrites structured clone. | Its role—mutates read record's timestamp, puts it in a new transaction, awaits completion—makes repeated geometry generation practical without changing output correctness. |
+| `cachedBytes` | Cursor-scans store and sums valid positive `byteSize`; promise resolves at cursor end. | Does not materialize records into a new collection. | Its role—cursor-scans store and sums valid positive `byteSize`; promise resolves at cursor end—makes repeated geometry generation practical without changing output correctness. |
+| `evictOldest` | Cursor-scans last-access index, deletes until total is within ceiling. | Mutates IndexedDB inside caller transaction. | Its role—cursor-scans last-access index, deletes until total is within ceiling—makes repeated geometry generation practical without changing output correctness. |
+| `evictLeastRecentlyUsed` | Readonly size transaction then conditional readwrite eviction transaction. | Runs after every successful write. Concurrent writers are serialized by IndexedDB transactions. | Its role—readonly size transaction then conditional readwrite eviction transaction—makes repeated geometry generation practical without changing output correctness. |
+| `geometryCacheKey` | Builds explicit geometry-only object; `JSON.stringify`; `new TextEncoder().encode`; `crypto.subtle.digest`; `new Uint8Array`; hex join. | Several temporary allocations per bin; excludes `binId`. | Its role—builds explicit geometry-only object; `JSON.stringify`; `new TextEncoder().encode`; `crypto.subtle.digest`; `new Uint8Array`; hex join—makes repeated geometry generation practical without changing output correctness. |
+| `readCachedBin` | Reads by key with `requestResult`; validates; schedules invalid removal or access refresh; returns `{binId,pieces}` or `null`; catches all errors. | Cache clone supplies typed arrays; hit wrapper reapplies current identity. | Its role—reads by key with `requestResult`; validates; schedules invalid removal or access refresh; returns `{binId,pieces}` or `null`; catches all errors—makes repeated geometry generation practical without changing output correctness. |
+| `writeCachedBin` | Creates timestamped record, puts/awaits, then evicts. | Errors reject to hook, which intentionally ignores them. | Its role—creates timestamped record, puts/awaits, then evicts—makes repeated geometry generation practical without changing output correctness. |
 
 ### `useBinGeometry` and worker module
 
-| Symbol | Calls / effects | Lifetime / performance |
-| --- | --- | --- |
-| `poolSize` | Reads `navigator.hardwareConcurrency`; clamps `(value ?? 2)-1` to 1…4. | Evaluated at worker-pool creation. |
-| `useBinGeometry` | React hook described below. | Hook lifetime is the mounted `App`. |
-| worker module `manifoldReady` | Calls `initManifold(() => wasmUrl)` at worker module evaluation. | One promise per worker. |
-| worker `self.onmessage` | Awaits `manifoldReady`; calls `generateGeometry`; builds success response and transfer list from triangle buffers; `self.postMessage`. Catch builds generic failure response. | One async handler per worker global. Manifold work after await is synchronous; transferred buffers detach. |
+| Symbol | Calls / effects | Lifetime / performance | Why it exists / application goal |
+| --- | --- | --- | --- |
+| `poolSize` | Reads `navigator.hardwareConcurrency`; clamps `(value ?? 2)-1` to 1…4. | Evaluated at worker-pool creation. | It bounds concurrent WASM work while adapting to the device, allowing multiple bins to generate without dedicating every reported hardware thread. |
+| `useBinGeometry` | React hook described below. | Hook lifetime is the mounted `App`. | It is the main-thread coordinator that turns each design snapshot into cached or newly generated bins while preventing obsolete asynchronous results from reaching preview or export. |
+| worker module `manifoldReady` | Calls `initManifold(() => wasmUrl)` at worker module evaluation. | One promise per worker. | It gives every worker one reusable initialized modeling runtime, making all later messages capable of constructing printable solids. |
+| worker `self.onmessage` | Awaits `manifoldReady`; calls `generateGeometry`; builds success response and transfer list from triangle buffers; `self.postMessage`. Catch builds generic failure response. | One async handler per worker global. Manifold work after await is synchronous; transferred buffers detach. | It is the executable worker boundary that converts cloned parameters into transferable triangle soups without blocking the editor thread. |
 
 `useBinGeometry` owns:
 
@@ -268,19 +269,19 @@ The generation effect increments revision, clears the prior timer, and returns e
 
 ### Shared and panel components
 
-| Component/helper | Behavior, callbacks, and state effects | Lifetime / performance |
-| --- | --- | --- |
-| `Label`, `Hint` | Pure presentational functions around Mantine `Text`. | Render-only; no local state/effects. |
-| `Field` | Renders `Input.Wrapper` with `LABEL_PROPS`, label, description, and children. | `LABEL_PROPS` is module-shared. |
-| `SliderField` | Calls Mantine `useId`; renders controlled `Slider`; forwards its `onChange`; formats display/unit/children. | New React elements per render; no internal value state. |
-| `StatusBanner` | Chooses green/check or yellow/warning Mantine `Alert` from `ok`. | Pure render. |
-| `Sidebar` | Owns `activeTab`; `TABS` maps names to components. `Tabs.onChange` ignores null then casts/sets; tab-map callback renders buttons. | Only active spatial editor mounts; switching tabs unmounts prior panel. |
-| `SettingsPanel` | `SECTIONS` maps labels to parameter components; map callback renders all as an uncontrolled multiple accordion. | Sections remain in React tree according to Mantine behavior; component owns no application state. |
-| `PanelResizeHandle` | Selects width/command; ref holds drag start. `onPointerDown` captures pointer, stores coordinates, adds `body.no-select`; `onPointerMove` calls `setPanelWidth`; `onPointerUp` releases capture/removes class. | Pointer callbacks recreated per render. Body class can remain if pointer-up is never received; no effect cleanup exists. |
-| `EditorCanvas` | Calculates view box; memoizes background rect grid by dimensions and selected-cell layer by cells; spreads native SVG props and renders overlays. | Background can contain up to `MAX_GRID²` elements but is reused across pointer renders while dimensions are stable. |
-| `binColor` | Stable unsigned rolling hash of optional bin id into module `BIN_COLORS`. | Pure string/array lookup. |
-| coordinate lambdas `gridToSvg`, `mmToSvg`, `svgToMm` | Convert grid/mm/SVG units using `CELL`, `PAD`, and pitch. | Pure arithmetic. |
-| `pointerToMm` | Reads SVG bounding rectangle/viewBox and calls `svgToMm` for pointer coordinates. | Browser layout read plus new point. |
+| Component/helper | Behavior, callbacks, and state effects | Lifetime / performance | Why it exists / application goal |
+| --- | --- | --- | --- |
+| `Label`, `Hint` | Pure presentational functions around Mantine `Text`. | Render-only; no local state/effects. | Its role—pure presentational functions around Mantine `Text`—gives users the controls, layout, and feedback needed to create a valid design. |
+| `Field` | Renders `Input.Wrapper` with `LABEL_PROPS`, label, description, and children. | `LABEL_PROPS` is module-shared. | Its role—renders `Input.Wrapper` with `LABEL_PROPS`, label, description, and children—gives users the controls, layout, and feedback needed to create a valid design. |
+| `SliderField` | Calls Mantine `useId`; renders controlled `Slider`; forwards its `onChange`; formats display/unit/children. | New React elements per render; no internal value state. | Its role—calls Mantine `useId`; renders controlled `Slider`; forwards its `onChange`; formats display/unit/children—gives users the controls, layout, and feedback needed to create a valid design. |
+| `StatusBanner` | Chooses green/check or yellow/warning Mantine `Alert` from `ok`. | Pure render. | Its role—chooses green/check or yellow/warning Mantine `Alert` from `ok`—gives users the controls, layout, and feedback needed to create a valid design. |
+| `Sidebar` | Owns `activeTab`; `TABS` maps names to components. `Tabs.onChange` ignores null then casts/sets; tab-map callback renders buttons. | Only active spatial editor mounts; switching tabs unmounts prior panel. | Its role—owns `activeTab`; `TABS` maps names to components. `Tabs.onChange` ignores null then casts/sets; tab-map callback renders buttons—gives users the controls, layout, and feedback needed to create a valid design. |
+| `SettingsPanel` | `SECTIONS` maps labels to parameter components; map callback renders all as an uncontrolled multiple accordion. | Sections remain in React tree according to Mantine behavior; component owns no application state. | Its role—`SECTIONS` maps labels to parameter components; map callback renders all as an uncontrolled multiple accordion—gives users the controls, layout, and feedback needed to create a valid design. |
+| `PanelResizeHandle` | Selects width/command; ref holds drag start. `onPointerDown` captures pointer, stores coordinates, adds `body.no-select`; `onPointerMove` calls `setPanelWidth`; `onPointerUp` releases capture/removes class. | Pointer callbacks recreated per render. Body class can remain if pointer-up is never received; no effect cleanup exists. | Its role—selects width/command; ref holds drag start. `onPointerDown` captures pointer, stores coordinates, adds `body.no-select`; `onPointerMove` calls `setPanelWidth`; `onPointerUp` releases capture/removes class—gives users the controls, layout, and feedback needed to create a valid design. |
+| `EditorCanvas` | Calculates view box; memoizes background rect grid by dimensions and selected-cell layer by cells; spreads native SVG props and renders overlays. | Background can contain up to `MAX_GRID²` elements but is reused across pointer renders while dimensions are stable. | Its role—calculates view box; memoizes background rect grid by dimensions and selected-cell layer by cells; spreads native SVG props and renders overlays—gives users the controls, layout, and feedback needed to create a valid design. |
+| `binColor` | Stable unsigned rolling hash of optional bin id into module `BIN_COLORS`. | Pure string/array lookup. | Its role—stable unsigned rolling hash of optional bin id into module `BIN_COLORS`—gives users the controls, layout, and feedback needed to create a valid design. |
+| coordinate lambdas `gridToSvg`, `mmToSvg`, `svgToMm` | Convert grid/mm/SVG units using `CELL`, `PAD`, and pitch. | Pure arithmetic. | Its role—convert grid/mm/SVG units using `CELL`, `PAD`, and pitch—gives users the controls, layout, and feedback needed to create a valid design. |
+| `pointerToMm` | Reads SVG bounding rectangle/viewBox and calls `svgToMm` for pointer coordinates. | Browser layout read plus new point. | Its role—reads SVG bounding rectangle/viewBox and calls `svgToMm` for pointer coordinates—gives users the controls, layout, and feedback needed to create a valid design. |
 
 ### `ShapeTab`
 
@@ -317,11 +318,11 @@ Inline perimeter callbacks stop pointer propagation and call `toggleOpening`. Wa
 
 ### Settings tabs
 
-| Component | Owned callbacks and state effects | Notes |
-| --- | --- | --- |
-| `DimensionsTab` | Local `filletMaxFor` calls `gridfinityHeight`/`maximumFilletRadius`. Height `onChange` calls `setHeightUnits`, computes max, and conditionally calls `setFilletRadius`; other sliders receive store commands directly. | Store updates may be separate notifications; validity coordination is intentionally UI-owned. |
-| `FeaturesTab` | Two switch callbacks read `event.currentTarget.checked` and call `setFasteners` with one-field patches. | Reads magnet dimensions from shared spec. |
-| `PrinterTab` | Select callback finds named `PRINTER_PROFILES` entry then `setPrinter`; custom dimension map renders inputs whose callbacks clone printer and replace one numeric field. | Calls `checkDesignFit` each render. `Number(value)` performs UI coercion. |
+| Component | Owned callbacks and state effects | Notes | Why it exists / application goal |
+| --- | --- | --- | --- |
+| `DimensionsTab` | Local `filletMaxFor` calls `gridfinityHeight`/`maximumFilletRadius`. Height `onChange` calls `setHeightUnits`, computes max, and conditionally calls `setFilletRadius`; other sliders receive store commands directly. | Store updates may be separate notifications; validity coordination is intentionally UI-owned. | Its role—local `filletMaxFor` calls `gridfinityHeight`/`maximumFilletRadius`. Height `onChange` calls `setHeightUnits`, computes max, and conditionally calls `setFilletRadius`; other sliders receive store commands directly—lets users configure generation constraints and physical features safely. |
+| `FeaturesTab` | Two switch callbacks read `event.currentTarget.checked` and call `setFasteners` with one-field patches. | Reads magnet dimensions from shared spec. | Its role—two switch callbacks read `event.currentTarget.checked` and call `setFasteners` with one-field patches—lets users configure generation constraints and physical features safely. |
+| `PrinterTab` | Select callback finds named `PRINTER_PROFILES` entry then `setPrinter`; custom dimension map renders inputs whose callbacks clone printer and replace one numeric field. | Calls `checkDesignFit` each render. `Number(value)` performs UI coercion. | Its role—select callback finds named `PRINTER_PROFILES` entry then `setPrinter`; custom dimension map renders inputs whose callbacks clone printer and replace one numeric field—lets users configure generation constraints and physical features safely. |
 
 ### `ExportMenu`
 
@@ -339,62 +340,62 @@ Only methods/properties exercised by application code are listed.
 
 ### Browser, React, and platform objects
 
-| Instance / creator | Used API | Owner and lifetime |
-| --- | --- | --- |
-| React root from `createRoot` | `render` | Entry module; renderer owns component tree. |
-| module `Worker[]` from `new Worker` | `onmessage`, `onerror`, `postMessage`, `terminate` | `useBinGeometry` mount effect to cleanup. |
-| `URL` from `new URL(..., import.meta.url)` | String/URL value passed to Worker | Temporary worker construction input. |
-| timers | `setTimeout`, `clearTimeout` | Hook debounce ref and export scheduling closures. |
-| `TextEncoder` | `encode` | Temporary cache-key hashing object. |
-| Web Crypto | `crypto.subtle.digest` | Returns digest promise/array buffer. |
-| typed arrays | `Float32Array` constructor/fields, `Uint32Array` constructor/`from`, `Uint8Array`; `length`, `byteLength`, `buffer` | Geometry output, mesh data, hashing, transfer, cache, STL. Buffers may transfer only worker→main. |
-| `ArrayBuffer`, `DataView` | constructors; `setUint32`, `setFloat32`, `setUint16` | STL serialization buffer/view. |
-| `Blob` | constructor | Temporary download payload. |
-| global `URL` | `createObjectURL`, `revokeObjectURL` | Temporary download URL. |
-| anchor from `document.createElement` | `href`, `download`, `click` | Temporary export helper; not attached. |
-| DOM root/body/targets | `getElementById`; `body.classList.add/remove`; `closest`; `dataset`; pointer capture/release; SVG `getBoundingClientRect`, `viewBox.baseVal` | Entry and editor events. DOM owns elements. |
-| `ResizeObserver` | constructor callback, `observe`, `disconnect` | Viewer mount effect. |
-| `Map`, `Set`, `WeakMap` | standard construction, lookup/update/iteration methods used throughout | Local derivation, hook pending state, geometry caches. `WeakMap` owns constant-cache association. |
+| Instance / creator | Used API | Owner and lifetime | Why it exists / application goal |
+| --- | --- | --- | --- |
+| React root from `createRoot` | `render` | Entry module; renderer owns component tree. | Its role—`render`—supplies browser capabilities required to run, persist, preview, or export a design. |
+| module `Worker[]` from `new Worker` | `onmessage`, `onerror`, `postMessage`, `terminate` | `useBinGeometry` mount effect to cleanup. | Its role—`onmessage`, `onerror`, `postMessage`, `terminate`—supplies browser capabilities required to run, persist, preview, or export a design. |
+| `URL` from `new URL(..., import.meta.url)` | String/URL value passed to Worker | Temporary worker construction input. | Its role—string/URL value passed to Worker—supplies browser capabilities required to run, persist, preview, or export a design. |
+| timers | `setTimeout`, `clearTimeout` | Hook debounce ref and export scheduling closures. | Its role—`setTimeout`, `clearTimeout`—supplies browser capabilities required to run, persist, preview, or export a design. |
+| `TextEncoder` | `encode` | Temporary cache-key hashing object. | Its role—`encode`—supplies browser capabilities required to run, persist, preview, or export a design. |
+| Web Crypto | `crypto.subtle.digest` | Returns digest promise/array buffer. | Its role—`crypto.subtle.digest`—supplies browser capabilities required to run, persist, preview, or export a design. |
+| typed arrays | `Float32Array` constructor/fields, `Uint32Array` constructor/`from`, `Uint8Array`; `length`, `byteLength`, `buffer` | Geometry output, mesh data, hashing, transfer, cache, STL. Buffers may transfer only worker→main. | Its role—`Float32Array` constructor/fields, `Uint32Array` constructor/`from`, `Uint8Array`; `length`, `byteLength`, `buffer`—supplies browser capabilities required to run, persist, preview, or export a design. |
+| `ArrayBuffer`, `DataView` | constructors; `setUint32`, `setFloat32`, `setUint16` | STL serialization buffer/view. | Its role—constructors; `setUint32`, `setFloat32`, `setUint16`—supplies browser capabilities required to run, persist, preview, or export a design. |
+| `Blob` | constructor | Temporary download payload. | Its role—constructor—supplies browser capabilities required to run, persist, preview, or export a design. |
+| global `URL` | `createObjectURL`, `revokeObjectURL` | Temporary download URL. | Its role—`createObjectURL`, `revokeObjectURL`—supplies browser capabilities required to run, persist, preview, or export a design. |
+| anchor from `document.createElement` | `href`, `download`, `click` | Temporary export helper; not attached. | Its role—`href`, `download`, `click`—supplies browser capabilities required to run, persist, preview, or export a design. |
+| DOM root/body/targets | `getElementById`; `body.classList.add/remove`; `closest`; `dataset`; pointer capture/release; SVG `getBoundingClientRect`, `viewBox.baseVal` | Entry and editor events. DOM owns elements. | Its role—`getElementById`; `body.classList.add/remove`; `closest`; `dataset`; pointer capture/release; SVG `getBoundingClientRect`, `viewBox.baseVal`—supplies browser capabilities required to run, persist, preview, or export a design. |
+| `ResizeObserver` | constructor callback, `observe`, `disconnect` | Viewer mount effect. | Its role—constructor callback, `observe`, `disconnect`—supplies browser capabilities required to run, persist, preview, or export a design. |
+| `Map`, `Set`, `WeakMap` | standard construction, lookup/update/iteration methods used throughout | Local derivation, hook pending state, geometry caches. `WeakMap` owns constant-cache association. | Its role—standard construction, lookup/update/iteration methods used throughout—supplies browser capabilities required to run, persist, preview, or export a design. |
 
 ### IndexedDB instances
 
-| Instance | Used methods/properties | Owner/lifetime |
-| --- | --- | --- |
-| `IDBOpenDBRequest` from `indexedDB.open` | `result`, `error`, `onupgradeneeded`, `onsuccess`, `onerror`, `onblocked` | `openDatabase` promise handlers. |
-| `IDBDatabase` | `createObjectStore`, `transaction`, `close` | Cached module promise; close only if open succeeds after failure. |
-| `IDBObjectStore` | `createIndex`, `get`, `put`, `delete`, `openCursor`, `index` | Scoped to upgrade/transactions. |
-| `IDBIndex` | `openCursor` | LRU ordering. |
-| `IDBRequest` | `result`, `error`, `onsuccess`, `onerror` | Promise/cursor wrappers. |
-| `IDBTransaction` | `objectStore`, `oncomplete`, `onerror`, `onabort`, `error` | One operation or scan; awaited before completion. |
-| `IDBCursorWithValue` | `value`, `continue`, `delete` | Size and eviction scans. |
+| Instance | Used methods/properties | Owner/lifetime | Why it exists / application goal |
+| --- | --- | --- | --- |
+| `IDBOpenDBRequest` from `indexedDB.open` | `result`, `error`, `onupgradeneeded`, `onsuccess`, `onerror`, `onblocked` | `openDatabase` promise handlers. | Its role—`result`, `error`, `onupgradeneeded`, `onsuccess`, `onerror`, `onblocked`—provides durable mesh reuse across edits and reloads. |
+| `IDBDatabase` | `createObjectStore`, `transaction`, `close` | Cached module promise; close only if open succeeds after failure. | Its role—`createObjectStore`, `transaction`, `close`—provides durable mesh reuse across edits and reloads. |
+| `IDBObjectStore` | `createIndex`, `get`, `put`, `delete`, `openCursor`, `index` | Scoped to upgrade/transactions. | Its role—`createIndex`, `get`, `put`, `delete`, `openCursor`, `index`—provides durable mesh reuse across edits and reloads. |
+| `IDBIndex` | `openCursor` | LRU ordering. | Its role—`openCursor`—provides durable mesh reuse across edits and reloads. |
+| `IDBRequest` | `result`, `error`, `onsuccess`, `onerror` | Promise/cursor wrappers. | Its role—`result`, `error`, `onsuccess`, `onerror`—provides durable mesh reuse across edits and reloads. |
+| `IDBTransaction` | `objectStore`, `oncomplete`, `onerror`, `onabort`, `error` | One operation or scan; awaited before completion. | Its role—`objectStore`, `oncomplete`, `onerror`, `onabort`, `error`—provides durable mesh reuse across edits and reloads. |
+| `IDBCursorWithValue` | `value`, `continue`, `delete` | Size and eviction scans. | Its role—`value`, `continue`, `delete`—provides durable mesh reuse across edits and reloads. |
 
 ### Manifold instances
 
-| Instance | Used API |
-| --- | --- |
-| `ManifoldToplevel` (`wasm`) | `setup`; `CrossSection.square/circle/union`; `Manifold.hull/union/sphere/cylinder`; constructors `new CrossSection`, `new Mesh`, `new Manifold`; `triangulate`. |
-| `CrossSection` | `offset`, `translate`, `toPolygons`, `decompose`, `add`, `intersect`, `subtract`, `union` through static API, `extrude`, `simplify`, `delete`. |
-| `Manifold` | `translate`, `subtract`, `intersect`, `simplify`, `minkowskiSum`, `getMesh`, `numVert`, `delete`; static creation/boolean methods above. |
-| `Mesh` | Constructor input carrier; extracted mesh properties `vertProperties`, `triVerts`, `numProp`. |
+| Instance | Used API | Why it exists / application goal |
+| --- | --- | --- |
+| `ManifoldToplevel` (`wasm`) | `setup`; `CrossSection.square/circle/union`; `Manifold.hull/union/sphere/cylinder`; constructors `new CrossSection`, `new Mesh`, `new Manifold`; `triangulate`. | Its role—`setup`; `CrossSection.square/circle/union`; `Manifold.hull/union/sphere/cylinder`; constructors `new CrossSection`, `new Mesh`, `new Manifold`; `triangulate`—provides robust solid modeling and mesh extraction for printable output. |
+| `CrossSection` | `offset`, `translate`, `toPolygons`, `decompose`, `add`, `intersect`, `subtract`, `union` through static API, `extrude`, `simplify`, `delete`. | Its role—`offset`, `translate`, `toPolygons`, `decompose`, `add`, `intersect`, `subtract`, `union` through static API, `extrude`, `simplify`, `delete`—provides robust solid modeling and mesh extraction for printable output. |
+| `Manifold` | `translate`, `subtract`, `intersect`, `simplify`, `minkowskiSum`, `getMesh`, `numVert`, `delete`; static creation/boolean methods above. | Its role—`translate`, `subtract`, `intersect`, `simplify`, `minkowskiSum`, `getMesh`, `numVert`, `delete`; static creation/boolean methods above—provides robust solid modeling and mesh extraction for printable output. |
+| `Mesh` | Constructor input carrier; extracted mesh properties `vertProperties`, `triVerts`, `numProp`. | Its role—constructor input carrier; extracted mesh properties `vertProperties`, `triVerts`, `numProp`—provides robust solid modeling and mesh extraction for printable output. |
 
 These are native/WASM-backed and are not structured-clone compatible. Production confines them to the worker. The code deliberately caches some instances and explicitly deletes selected intermediates; the geometry guide is authoritative for ownership constraints.
 
 ### Babylon instances
 
-| Instance | Used methods/properties | Owner/lifetime |
-| --- | --- | --- |
-| `Engine` | constructor, `runRenderLoop`, `resize`, `dispose`, `getAspectRatio` | Viewer mount. Disposal tears down owned scene resources. |
-| `Scene` | constructor; `useRightHandedSystem`, `clearColor`; `render`, `getEngine`, `stopAnimation` | Viewer mount. |
-| `TransformNode` | constructor; `rotation.x` | Shared mesh parent for mount. |
-| `ArcRotateCamera` | constructor; `attachControl`; `target`, `radius`, `alpha`, `beta`, `fov`, radius limits, `wheelDeltaPercentage` | Viewer mount; refs and fit/reset mutate it. |
-| `HemisphericLight`, `DirectionalLight` | constructors; `intensity`; ambient `diffuse`, `groundColor` | Scene-owned for mount. |
-| `StandardMaterial` | constructor; `diffuseColor`, `specularColor`, `sideOrientation`, `dispose` | One per bin per geometry effect; replaced on new parts. |
-| `Mesh` | constructor; `material`, `parent`, `position.set`, `computeWorldMatrix`, `getBoundingInfo`, `dispose` | One per preview piece until replacement/unmount. |
-| `VertexData` | constructor; `positions`, `indices`, `normals`, `applyToMesh`; static `ComputeNormals` | Temporary per mesh; applied data becomes mesh-owned. |
-| `Vector3` | static `Zero`, `Minimize`, `Maximize`; `clone`, `add`, `scale`, `subtract`, `length` | Camera/bounds temporaries and light directions. |
-| `Color3`, `Color4` | constructors; `Color3.FromHexString` | Scene/material color values. |
-| `CubicEase` | constructor; `setEasingMode` | One per animated camera fit call. |
-| `Animation` | static `CreateAndStartAnimation`; constants `ANIMATIONLOOPMODE_CONSTANT` | Scene-owned animation results are not retained. |
+| Instance | Used methods/properties | Owner/lifetime | Why it exists / application goal |
+| --- | --- | --- | --- |
+| `Engine` | constructor, `runRenderLoop`, `resize`, `dispose`, `getAspectRatio` | Viewer mount. Disposal tears down owned scene resources. | Its role—constructor, `runRenderLoop`, `resize`, `dispose`, `getAspectRatio`—turns generated triangles into an accurate, interactive 3D preview. |
+| `Scene` | constructor; `useRightHandedSystem`, `clearColor`; `render`, `getEngine`, `stopAnimation` | Viewer mount. | Its role—constructor; `useRightHandedSystem`, `clearColor`; `render`, `getEngine`, `stopAnimation`—turns generated triangles into an accurate, interactive 3D preview. |
+| `TransformNode` | constructor; `rotation.x` | Shared mesh parent for mount. | Its role—constructor; `rotation.x`—turns generated triangles into an accurate, interactive 3D preview. |
+| `ArcRotateCamera` | constructor; `attachControl`; `target`, `radius`, `alpha`, `beta`, `fov`, radius limits, `wheelDeltaPercentage` | Viewer mount; refs and fit/reset mutate it. | Its role—constructor; `attachControl`; `target`, `radius`, `alpha`, `beta`, `fov`, radius limits, `wheelDeltaPercentage`—turns generated triangles into an accurate, interactive 3D preview. |
+| `HemisphericLight`, `DirectionalLight` | constructors; `intensity`; ambient `diffuse`, `groundColor` | Scene-owned for mount. | Its role—constructors; `intensity`; ambient `diffuse`, `groundColor`—turns generated triangles into an accurate, interactive 3D preview. |
+| `StandardMaterial` | constructor; `diffuseColor`, `specularColor`, `sideOrientation`, `dispose` | One per bin per geometry effect; replaced on new parts. | Its role—constructor; `diffuseColor`, `specularColor`, `sideOrientation`, `dispose`—turns generated triangles into an accurate, interactive 3D preview. |
+| `Mesh` | constructor; `material`, `parent`, `position.set`, `computeWorldMatrix`, `getBoundingInfo`, `dispose` | One per preview piece until replacement/unmount. | Its role—constructor; `material`, `parent`, `position.set`, `computeWorldMatrix`, `getBoundingInfo`, `dispose`—turns generated triangles into an accurate, interactive 3D preview. |
+| `VertexData` | constructor; `positions`, `indices`, `normals`, `applyToMesh`; static `ComputeNormals` | Temporary per mesh; applied data becomes mesh-owned. | Its role—constructor; `positions`, `indices`, `normals`, `applyToMesh`; static `ComputeNormals`—turns generated triangles into an accurate, interactive 3D preview. |
+| `Vector3` | static `Zero`, `Minimize`, `Maximize`; `clone`, `add`, `scale`, `subtract`, `length` | Camera/bounds temporaries and light directions. | Its role—static `Zero`, `Minimize`, `Maximize`; `clone`, `add`, `scale`, `subtract`, `length`—turns generated triangles into an accurate, interactive 3D preview. |
+| `Color3`, `Color4` | constructors; `Color3.FromHexString` | Scene/material color values. | Its role—constructors; `Color3.FromHexString`—turns generated triangles into an accurate, interactive 3D preview. |
+| `CubicEase` | constructor; `setEasingMode` | One per animated camera fit call. | Its role—constructor; `setEasingMode`—turns generated triangles into an accurate, interactive 3D preview. |
+| `Animation` | static `CreateAndStartAnimation`; constants `ANIMATIONLOOPMODE_CONSTANT` | Scene-owned animation results are not retained. | Its role—static `CreateAndStartAnimation`; constants `ANIMATIONLOOPMODE_CONSTANT`—turns generated triangles into an accurate, interactive 3D preview. |
 
 ## Synchronization checklist
 
